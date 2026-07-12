@@ -12,8 +12,6 @@
     "node": ">=20"
   },
   "dependencies": {
-    "express": "^4.21.2",
-    "undici": "^8.7.0"
+    "express": "^4.21.2"
   }
 }
-
