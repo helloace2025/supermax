@@ -1,6 +1,6 @@
 # Pin Node for Railway / Nixpacks builds
 [phases.setup]
-nixPkgs = ["nodejs_20"]
+nixPkgs = ["nodejs_22"]
 
 [phases.install]
 # Force official registry (local lockfiles may have been generated via npmmirror)
