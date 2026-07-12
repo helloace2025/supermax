@@ -20,17 +20,33 @@ const CHAIN_ID = Number(process.env.CHAIN_ID) || 4663;
 /** @deprecated alias — keep internal code readable */
 const BLOCKSCOUT = BLOCKSCOUT_API;
 
-/** Prefer system HTTP(S)_PROXY (common on Windows with Clash/V2Ray) */
-const PROXY_URL =
-  process.env.HTTPS_PROXY ||
-  process.env.HTTP_PROXY ||
-  process.env.https_proxy ||
-  process.env.http_proxy ||
-  "";
-const proxyAgent = PROXY_URL ? new ProxyAgent(PROXY_URL) : undefined;
-if (proxyAgent) {
-  console.log(`[mint-radar] using proxy ${PROXY_URL}`);
+/**
+ * Optional HTTP(S) proxy (local Clash etc.).
+ * Never use 127.0.0.1/localhost proxies on Railway — they crash outbound fetches.
+ */
+function createProxyAgent() {
+  const raw =
+    process.env.HTTPS_PROXY ||
+    process.env.HTTP_PROXY ||
+    process.env.https_proxy ||
+    process.env.http_proxy ||
+    "";
+  const url = String(raw || "").trim();
+  if (!url) return undefined;
+  if (/127\.0\.0\.1|localhost|\[::1\]/i.test(url)) {
+    console.log(`[mint-radar] ignoring loopback proxy (${url}) — not valid in cloud`);
+    return undefined;
+  }
+  try {
+    const agent = new ProxyAgent(url);
+    console.log(`[mint-radar] using proxy ${url}`);
+    return agent;
+  } catch (e) {
+    console.warn(`[mint-radar] proxy init failed, continuing direct:`, e.message || e);
+    return undefined;
+  }
 }
+const proxyAgent = createProxyAgent();
 if (BLOCKSCOUT_API_KEY) {
   console.log(`[mint-radar] Blockscout API key enabled`);
 }
@@ -505,10 +521,10 @@ async function ethCallUint256(contract, data) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
   try {
-    const res = await undiciFetch(`${BLOCKSCOUT}/api/eth-rpc`, {
+    /** @type {import("undici").RequestInit} */
+    const init = {
       method: "POST",
       signal: ctrl.signal,
-      dispatcher: proxyAgent,
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
@@ -520,7 +536,9 @@ async function ethCallUint256(contract, data) {
         method: "eth_call",
         params: [{ to: c, data }, "latest"],
       }),
-    });
+    };
+    if (proxyAgent) init.dispatcher = proxyAgent;
+    const res = await undiciFetch(`${BLOCKSCOUT}/api/eth-rpc`, init);
     if (!res.ok) {
       if (res.status === 429) {
         rateLimitUntil = Date.now() + RATE_LIMIT_BACKOFF_MS;
@@ -914,14 +932,17 @@ async function fetchJson(url) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
   try {
-    const res = await undiciFetch(withApiKey(url), {
+    /** @type {import("undici").RequestInit} */
+    const init = {
       signal: ctrl.signal,
-      dispatcher: proxyAgent,
       headers: {
         Accept: "application/json",
         "User-Agent": "robin-nft-radar/1.0",
       },
-    });
+    };
+    // Only attach proxy dispatcher when valid (undefined can confuse undici)
+    if (proxyAgent) init.dispatcher = proxyAgent;
+    const res = await undiciFetch(withApiKey(url), init);
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       if (res.status === 429) {
@@ -981,9 +1002,20 @@ async function pollOnce() {
       lastError = lastErr.message || String(lastErr);
       console.error("[mint-radar] poll failed:", lastError);
     }
+  } catch (e) {
+    // Never let poll crash the process (Railway marks CRASHED on unhandled rejections)
+    lastError = e?.message || String(e);
+    console.error("[mint-radar] pollOnce fatal (swallowed):", lastError);
   } finally {
     polling = false;
   }
+}
+
+/** Fire-and-forget poll that never becomes an unhandled rejection */
+function safePollOnce() {
+  pollOnce().catch((e) => {
+    console.error("[mint-radar] safePollOnce:", e?.message || e);
+  });
 }
 
 function allEvents() {
@@ -1245,8 +1277,8 @@ export function getMintSnapshot(opts = {}) {
 export function startMintRadar() {
   if (pollTimer) return;
   console.log("[mint-radar] starting (Blockscout poll)");
-  pollOnce();
-  pollTimer = setInterval(pollOnce, POLL_MS);
+  safePollOnce();
+  pollTimer = setInterval(safePollOnce, POLL_MS);
 }
 
 export function stopMintRadar() {

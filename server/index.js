@@ -15,6 +15,15 @@ const ROOT = path.join(__dirname, "..");
 const PORT = Number(process.env.PORT) || 3789;
 const HOST = process.env.HOST || "0.0.0.0";
 
+// Railway: unhandled async errors must NOT kill the web process
+process.on("unhandledRejection", (err) => {
+  console.error("[unhandledRejection]", err?.message || err);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[uncaughtException]", err?.message || err);
+  // keep process alive for HTTP; only exit on listen failures below
+});
+
 const app = express();
 app.disable("x-powered-by");
 app.use(express.json({ limit: "256kb" }));
