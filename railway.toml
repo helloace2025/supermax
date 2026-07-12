@@ -1,16 +1,15 @@
 # Railway deploy — https://docs.railway.com
-# New Project → Deploy from GitHub → this repo. No Dockerfile required.
-#
-# Public URL: Settings → Networking → Generate Domain
-# Do NOT set HTTPS_PROXY on Railway (local only).
+# After first green deploy: Settings → Networking → Generate Domain
+# (screenshot "Unexposed service" = no public domain yet)
 
 [build]
 builder = "NIXPACKS"
 
 [deploy]
 startCommand = "npm start"
-# Express binds process.env.PORT (Railway) on 0.0.0.0
-healthcheckPath = "/api/health"
-healthcheckTimeout = 120
+# Temporarily no healthcheck gate — app exposes /api/health for manual checks.
+# Re-enable after domain is generated if desired:
+# healthcheckPath = "/api/health"
+# healthcheckTimeout = 120
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10

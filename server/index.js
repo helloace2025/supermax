@@ -10,14 +10,15 @@ import { getMintSnapshot, startMintRadar } from "./mint-radar.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
+
+// Railway injects PORT; bind all interfaces for container networking
 const PORT = Number(process.env.PORT) || 3789;
-/** Railway / Docker / VPS need 0.0.0.0; localhost-only binds break public deploy */
 const HOST = process.env.HOST || "0.0.0.0";
 
 const app = express();
 app.disable("x-powered-by");
 app.use(express.json({ limit: "256kb" }));
-// HTML always revalidated; CSS/JS use query ?v= on links for cache bust while iterating UI
+
 app.use(
   express.static(path.join(ROOT, "public"), {
     maxAge: process.env.NODE_ENV === "production" ? "1h" : 0,
@@ -29,8 +30,17 @@ app.use(
   })
 );
 
+// Railway network healthcheck — keep it trivial (no heavy snapshot work)
 app.get("/api/health", (_req, res) => {
-  // Never fail healthcheck during cold start / empty store (Railway deploy gate)
+  res.status(200).type("text/plain").send("ok");
+});
+
+app.get("/health", (_req, res) => {
+  res.status(200).type("text/plain").send("ok");
+});
+
+// Richer status for debugging (not used by Railway healthcheck)
+app.get("/api/status", (_req, res) => {
   try {
     const snap = getMintSnapshot({ windowMin: 5, feedLimit: 1, hotLimit: 1 });
     res.status(200).json({
@@ -62,22 +72,24 @@ app.get("/api/mints", (req, res) => {
   }
 });
 
-// Default page = mint radar
 app.get("/", (_req, res) => {
   res.sendFile(path.join(ROOT, "public", "mint.html"));
 });
 
 const server = app.listen(PORT, HOST, () => {
   console.log(`\n  ROBIN NFT Radar`);
-  console.log(`  → http://${HOST}:${PORT}`);
-  console.log(`  → http://localhost:${PORT}/mint.html`);
-  console.log(`  PORT=${PORT} HOST=${HOST}`);
+  console.log(`  listening ${HOST}:${PORT}`);
+  console.log(`  health → /api/health`);
   console.log(`  Chain: Robinhood (4663)\n`);
-  try {
-    startMintRadar();
-  } catch (e) {
-    console.error("[mint-radar] failed to start poller:", e);
-  }
+
+  // Start poller after HTTP is up so healthcheck can pass during deploy
+  setImmediate(() => {
+    try {
+      startMintRadar();
+    } catch (e) {
+      console.error("[mint-radar] failed to start poller:", e);
+    }
+  });
 });
 
 server.on("error", (err) => {
