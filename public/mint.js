@@ -1760,7 +1760,7 @@
   applyThemeUi();
   applyStaticI18n();
   refresh();
-  timer = setInterval(refresh, 2500);
+  timer = setInterval(refresh, 2000);
 
   window.addEventListener("beforeunload", () => {
     if (timer) clearInterval(timer);

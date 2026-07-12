@@ -55,7 +55,7 @@ const JUNK_RE =
 
 const MAX_EVENTS = 4000;
 /** Main mint poll interval — leave headroom under Blockscout rate limits */
-const POLL_MS = 3000;
+const POLL_MS = 2000;
 const FETCH_TIMEOUT_MS = 12000;
 /** Tx price lookups share the same Blockscout quota as poll — keep low. */
 const TX_PRICE_CONCURRENCY = 1;
