@@ -3,7 +3,11 @@
 nixPkgs = ["nodejs_20"]
 
 [phases.install]
-cmds = ["npm ci"]
+# Force official registry (local lockfiles may have been generated via npmmirror)
+cmds = [
+  "npm config set registry https://registry.npmjs.org/",
+  "npm ci --omit=dev"
+]
 
 [start]
 cmd = "npm start"

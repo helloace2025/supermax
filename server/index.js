@@ -30,13 +30,23 @@ app.use(
 );
 
 app.get("/api/health", (_req, res) => {
-  const snap = getMintSnapshot({ windowMin: 5, feedLimit: 1, hotLimit: 1 });
-  res.json({
-    ok: true,
-    product: "robin-nft-radar",
-    chain: snap.chain,
-    status: snap.status,
-  });
+  // Never fail healthcheck during cold start / empty store (Railway deploy gate)
+  try {
+    const snap = getMintSnapshot({ windowMin: 5, feedLimit: 1, hotLimit: 1 });
+    res.status(200).json({
+      ok: true,
+      product: "robin-nft-radar",
+      chain: snap.chain,
+      status: snap.status,
+    });
+  } catch (e) {
+    res.status(200).json({
+      ok: true,
+      product: "robin-nft-radar",
+      degraded: true,
+      error: e.message || String(e),
+    });
+  }
 });
 
 app.get("/api/mints", (req, res) => {
@@ -57,10 +67,20 @@ app.get("/", (_req, res) => {
   res.sendFile(path.join(ROOT, "public", "mint.html"));
 });
 
-app.listen(PORT, HOST, () => {
+const server = app.listen(PORT, HOST, () => {
   console.log(`\n  ROBIN NFT Radar`);
   console.log(`  → http://${HOST}:${PORT}`);
   console.log(`  → http://localhost:${PORT}/mint.html`);
+  console.log(`  PORT=${PORT} HOST=${HOST}`);
   console.log(`  Chain: Robinhood (4663)\n`);
-  startMintRadar();
+  try {
+    startMintRadar();
+  } catch (e) {
+    console.error("[mint-radar] failed to start poller:", e);
+  }
+});
+
+server.on("error", (err) => {
+  console.error("[server] listen error:", err);
+  process.exit(1);
 });
