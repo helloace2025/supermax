@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RH NFT Mint Radar · Robinhood Chain</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/favicon.svg" />
+    <meta name="theme-color" content="#0B1220" />
+    <link rel="stylesheet" href="/mint.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div class="bg-grid"></div>
+    <div class="bg-glow"></div>
+
+    <header class="top">
+      <div class="brand">
+        <div class="logo">M</div>
+        <div>
+          <h1 data-i18n="brandTitle">NFT Mint Radar</h1>
+          <p class="sub">
+            <span data-i18n="brandSub">Robinhood Chain · 实时铸造热度</span>
+            <a id="explorerLink" href="https://robinhoodchain.blockscout.com/" target="_blank" rel="noopener"
+              >Blockscout ↗</a
+            >
+          </p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <div class="lang-switch" role="group" aria-label="Language">
+          <button type="button" class="lang-btn active" data-lang="zh" id="langZh">中文</button>
+          <button type="button" class="lang-btn" data-lang="en" id="langEn">EN</button>
+        </div>
+        <div class="live-pill" id="livePill">
+          <span class="dot"></span>
+          <span id="liveText" data-i18n="liveConnecting">连接中…</span>
+        </div>
+      </div>
+    </header>
+
+    <section class="kpi-bar" id="statsRow" data-i18n-aria="kpiAria" aria-label="关键指标">
+      <div class="kpi">
+        <span class="kpi-k" data-i18n="kpiHottest">当前最热</span>
+        <span class="kpi-v" id="kLeader">—</span>
+      </div>
+      <span class="kpi-sep" aria-hidden="true"></span>
+      <div class="kpi">
+        <span class="kpi-k" data-i18n="kpi5m">5 分钟量</span>
+        <span class="kpi-v" id="kVel">—</span>
+      </div>
+      <span class="kpi-sep" aria-hidden="true"></span>
+      <div class="kpi">
+        <span class="kpi-k" data-i18n="kpiMinters">独立 minter</span>
+        <span class="kpi-v" id="kMinters">—</span>
+      </div>
+      <span class="kpi-sep" aria-hidden="true"></span>
+      <div class="kpi">
+        <span class="kpi-k" data-i18n="kpiCols">活跃集合</span>
+        <span class="kpi-v" id="kCols">—</span>
+      </div>
+      <span class="kpi-sep" aria-hidden="true"></span>
+      <div class="kpi">
+        <span class="kpi-k" data-i18n="kpiNew">新盘 (低 supply)</span>
+        <span class="kpi-v" id="kNew">—</span>
+      </div>
+      <span class="kpi-sep" aria-hidden="true"></span>
+      <div class="kpi">
+        <span class="kpi-k" data-i18n="kpiLast">最近一笔</span>
+        <span class="kpi-v" id="kLast">—</span>
+      </div>
+      <span class="kpi-sep" aria-hidden="true"></span>
+      <div class="kpi">
+        <span class="kpi-k" data-i18n="kpiBlock">区块</span>
+        <span class="kpi-v mono" id="kBlock">—</span>
+      </div>
+    </section>
+
+    <section class="controls">
+      <div class="controls-right">
+        <label class="check">
+          <input type="checkbox" id="hideLp" checked />
+          <span data-i18n="hideLp">隐藏 LP NFT</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="onlyPaid" />
+          <span data-i18n="onlyMethod">仅显示有 method 的 mint</span>
+        </label>
+        <div class="blocked-wrap">
+          <button type="button" class="btn btn-muted" id="btnBlocked" data-i18n="blockedBtn">
+            已屏蔽 · 0
+          </button>
+          <div class="blocked-panel" id="blockedPanel" hidden>
+            <div class="blocked-panel-head">
+              <span data-i18n="blockedTitle">屏蔽列表</span>
+              <button type="button" class="blocked-clear" id="btnClearBlocked" data-i18n="blockedClear">
+                全部取消
+              </button>
+            </div>
+            <ul class="blocked-list" id="blockedList"></ul>
+            <p class="blocked-empty" id="blockedEmpty" data-i18n="blockedEmpty">暂无屏蔽</p>
+          </div>
+        </div>
+        <button type="button" class="btn" id="btnRefresh" data-i18n="refresh">立即刷新</button>
+      </div>
+    </section>
+
+    <main class="layout">
+      <section class="panel hot-panel">
+        <div class="panel-head">
+          <h2 data-i18n="hotTitle">🔥 铸造热榜</h2>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th data-i18n="thCollection">集合</th>
+                <th data-i18n="thUnique">独立 minter</th>
+                <th data-i18n="th5m">5 分钟</th>
+                <th data-i18n="th30m">30 分钟</th>
+                <th data-i18n="th1h">1 小时</th>
+                <th data-i18n="thHolders">Holders</th>
+                <th data-i18n="thSupply">Supply</th>
+                <th data-i18n="thRecent">最近</th>
+              </tr>
+            </thead>
+            <tbody id="hotBody">
+              <tr>
+                <td colspan="9" class="empty" data-i18n="hotLoading">正在拉取链上 mint…</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel feed-panel">
+        <div class="panel-head">
+          <h2 data-i18n="feedTitle">⚡ 实时铸造流</h2>
+          <span class="hint" data-i18n="feedHint">from 0x0 · ERC-721</span>
+        </div>
+        <div class="feed" id="feed"></div>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <span id="statusLine" data-i18n="statusWaiting">等待数据…</span>
+      <span data-i18n="footerNote">数据源：Blockscout REST · 无需自建节点（后续可升级 RPC eth_getLogs）</span>
+    </footer>
+
+    <script src="/mint.js"></script>
+  </body>
+</html>

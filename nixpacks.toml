@@ -1,0 +1,9 @@
+# Pin Node for Railway / Nixpacks builds
+[phases.setup]
+nixPkgs = ["nodejs_20"]
+
+[phases.install]
+cmds = ["npm ci"]
+
+[start]
+cmd = "npm start"
