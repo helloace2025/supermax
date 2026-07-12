@@ -1,12 +1,16 @@
-# Railway deploy config — https://docs.railway.com
-# Import this GitHub repo → Deploy. No extra build step required.
+# Railway deploy — https://docs.railway.com
+# New Project → Deploy from GitHub → this repo. No Dockerfile required.
+#
+# Public URL: Settings → Networking → Generate Domain
+# Do NOT set HTTPS_PROXY on Railway (local only).
 
 [build]
 builder = "NIXPACKS"
 
 [deploy]
 startCommand = "npm start"
+# Express binds process.env.PORT (Railway) on 0.0.0.0
 healthcheckPath = "/api/health"
-healthcheckTimeout = 60
+healthcheckTimeout = 100
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10

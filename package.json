@@ -1,8 +1,8 @@
 {
-  "name": "rh-nft-mint-radar",
+  "name": "robin-nft-radar",
   "version": "1.0.0",
   "private": true,
-  "description": "Robinhood Chain NFT Mint Radar — real-time mint heat rankings",
+  "description": "ROBIN NFT Radar — real-time mint heat rankings on Robinhood Chain",
   "type": "module",
   "scripts": {
     "start": "node server/index.js",

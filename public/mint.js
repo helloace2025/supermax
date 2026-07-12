@@ -1,52 +1,54 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const LANG_KEY = "mint-radar-lang";
+  const THEME_KEY = "mint-radar-theme";
   const BLOCK_KEY = "mint-radar-blocked";
   const BLOCK_META_KEY = "mint-radar-blocked-meta";
+  const FAV_KEY = "mint-radar-favorites";
+  const FAV_META_KEY = "mint-radar-favorites-meta";
+  const PRICE_FILTER_KEY = "mint-radar-price-filter";
 
   const EYE_SLASH_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M2.1 3.51 3.51 2.1l18.38 18.39-1.41 1.41-3.1-3.1A11.4 11.4 0 0 1 12 19c-5 0-9.27-3.11-11-7.5a12.3 12.3 0 0 1 4.18-5.09L2.1 3.51zM12 7a5 5 0 0 1 5 5c0 .7-.14 1.36-.4 1.97l-1.57-1.57A2.99 2.99 0 0 0 12 9c-.4 0-.78.08-1.13.23L9.3 7.66A4.96 4.96 0 0 1 12 7zm0-5c5 0 9.27 3.11 11 7.5a12.48 12.48 0 0 1-4.05 5.04l-1.45-1.45A10.4 10.4 0 0 0 21.17 9.5 10.46 10.46 0 0 0 12 4c-1.08 0-2.12.16-3.1.46L7.35 2.9A12.3 12.3 0 0 1 12 2zM8.12 9.54 9.6 11A3 3 0 0 0 12 15c.36 0 .7-.06 1.02-.18l1.48 1.48A5 5 0 0 1 8.12 9.54z"/></svg>`;
+  /* Outline star — stroke follows currentColor so light/dark themes flip black↔white */
+  const STAR_SVG = `<svg class="star-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none"><path d="M12 3.1l2.45 5.55 6 .55-4.55 3.95 1.4 5.85L12 15.85 6.7 19l1.4-5.85-4.55-3.95 6-.55L12 3.1z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round" fill="none"/></svg>`;
+  const SEARCH_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>`;
 
   const I18N = {
     zh: {
       htmlLang: "zh-CN",
-      title: "RH NFT Mint Radar · Robinhood Chain",
-      brandTitle: "NFT Mint Radar",
+      title: "ROBIN NFT Radar · Robinhood Chain",
+      brandTitle: "ROBIN NFT Radar",
       brandSub: "Robinhood Chain · 实时铸造热度",
-      liveConnecting: "连接中…",
-      liveOk: "实时监控中",
-      liveWarm: "预热中…",
-      livePollErr: "轮询异常",
-      liveFail: "连接失败",
-      kpiAria: "关键指标",
-      kpiHottest: "当前最热",
-      kpi5m: "5 分钟量",
-      kpiMinters: "独立 minter",
-      kpiCols: "活跃集合",
-      kpiNew: "新盘 (低 supply)",
-      kpiLast: "最近一笔",
-      kpiBlock: "区块",
-      hideLp: "隐藏 LP NFT",
-      onlyMethod: "仅显示有 method 的 mint",
       refresh: "立即刷新",
       hotTitle: "🔥 铸造热榜",
       thCollection: "集合",
-      thUnique: "独立 minter",
       th5m: "5 分钟",
       th30m: "30 分钟",
       th1h: "1 小时",
+      thPrice: "价格",
       thHolders: "Holders",
-      thSupply: "Supply",
+      thMinted: "已铸造",
       thRecent: "最近",
+      priceFree: "免费",
+      pricePending: "…",
+      priceFilterAll: "全部",
+      priceFilterFree: "免费",
+      priceFilterPaid: "付费",
+      priceFilterTitle: "按价格筛选",
+      mintOut: "MINT OUT",
+      mintProgressTitle: (minted, max, pct) =>
+        `进度 ${minted} / ${max}（${pct}%）`,
+      mintProgressUnknown: "上限未知（开放铸造或合约未读到 maxSupply）",
       hotLoading: "正在拉取链上 mint…",
       hotEmpty: "暂无铸造数据（或仍在预热缓存）…",
       feedTitle: "⚡ 实时铸造流",
       feedHint: "from 0x0 · ERC-721",
       feedEmpty: "暂无铸造事件",
+      outTitle: "🏁 已铸完",
+      outHint: "MINT OUT · 仍可跟进",
+      outEmpty: "暂无已铸完项目（需读到 maxSupply）",
       statusWaiting: "等待数据…",
       footerNote: "数据源：Blockscout REST · 无需自建节点（后续可升级 RPC eth_getLogs）",
-      none: "暂无",
-      addresses: "地址",
-      colsUnit: "个",
       justNow: "刚刚",
       secAgo: (s) => `${s}s 前`,
       minAgo: (m) => `${m}m 前`,
@@ -59,53 +61,61 @@
       minter: "minter",
       explorer: "Explorer",
       blockTitle: "屏蔽此项目",
+      googleSearchTitle: "Google 搜图",
+      walletDisconnect: "退出钱包",
+      walletMenuTitle: "已连接",
       blockedBtn: (n) => `已屏蔽 · ${n}`,
       blockedTitle: "屏蔽列表",
       blockedClear: "全部取消",
       blockedEmpty: "暂无屏蔽",
       unblock: "取消屏蔽",
+      favoriteTitle: "收藏此项目",
+      unfavoriteTitle: "取消收藏",
+      favBtn: (n) => `已收藏 · ${n}`,
+      favTitle: "收藏列表",
+      favClear: "全部取消",
+      favEmpty: "暂无收藏",
+      unfavorite: "取消收藏",
+      highRisk: "高风险",
+      highRiskTitle: (ratio) =>
+        `高风险：已铸造 ÷ Holders ≈ ${ratio}（>10，人均持仓偏多，疑似控盘）`,
     },
     en: {
       htmlLang: "en",
-      title: "RH NFT Mint Radar · Robinhood Chain",
-      brandTitle: "NFT Mint Radar",
+      title: "ROBIN NFT Radar · Robinhood Chain",
+      brandTitle: "ROBIN NFT Radar",
       brandSub: "Robinhood Chain · Live mint heat",
-      liveConnecting: "Connecting…",
-      liveOk: "Live",
-      liveWarm: "Warming up…",
-      livePollErr: "Poll error",
-      liveFail: "Connection failed",
-      kpiAria: "Key metrics",
-      kpiHottest: "Hottest now",
-      kpi5m: "5m volume",
-      kpiMinters: "Unique minters",
-      kpiCols: "Active collections",
-      kpiNew: "New (low supply)",
-      kpiLast: "Latest mint",
-      kpiBlock: "Block",
-      hideLp: "Hide LP NFTs",
-      onlyMethod: "Only mints with method",
       refresh: "Refresh",
       hotTitle: "🔥 Mint Leaderboard",
       thCollection: "Collection",
-      thUnique: "Unique minters",
       th5m: "5 min",
       th30m: "30 min",
       th1h: "1 hour",
+      thPrice: "Price",
       thHolders: "Holders",
-      thSupply: "Supply",
+      thMinted: "Minted",
       thRecent: "Latest",
+      priceFree: "Free",
+      pricePending: "…",
+      priceFilterAll: "All",
+      priceFilterFree: "Free",
+      priceFilterPaid: "Paid",
+      priceFilterTitle: "Filter by price",
+      mintOut: "MINT OUT",
+      mintProgressTitle: (minted, max, pct) =>
+        `Progress ${minted} / ${max} (${pct}%)`,
+      mintProgressUnknown: "Max supply unknown (open edition or unread maxSupply)",
       hotLoading: "Loading on-chain mints…",
       hotEmpty: "No mint data yet (or still warming cache)…",
       feedTitle: "⚡ Live mint feed",
       feedHint: "from 0x0 · ERC-721",
       feedEmpty: "No mint events yet",
+      outTitle: "🏁 Minted Out",
+      outHint: "MINT OUT · still trackable",
+      outEmpty: "No sold-out collections yet (needs maxSupply)",
       statusWaiting: "Waiting for data…",
       footerNote:
         "Source: Blockscout REST · No self-hosted node (RPC eth_getLogs later)",
-      none: "None",
-      addresses: "addrs",
-      colsUnit: "",
       justNow: "just now",
       secAgo: (s) => `${s}s ago`,
       minAgo: (m) => `${m}m ago`,
@@ -118,11 +128,24 @@
       minter: "minter",
       explorer: "Explorer",
       blockTitle: "Block this collection",
+      googleSearchTitle: "Google image search",
+      walletDisconnect: "Disconnect",
+      walletMenuTitle: "Connected",
       blockedBtn: (n) => `Blocked · ${n}`,
       blockedTitle: "Blocked list",
       blockedClear: "Unblock all",
       blockedEmpty: "Nothing blocked",
       unblock: "Unblock",
+      favoriteTitle: "Favorite this collection",
+      unfavoriteTitle: "Remove favorite",
+      favBtn: (n) => `Favorites · ${n}`,
+      favTitle: "Favorites",
+      favClear: "Clear all",
+      favEmpty: "No favorites yet",
+      unfavorite: "Unfavorite",
+      highRisk: "High Risk",
+      highRiskTitle: (ratio) =>
+        `High Risk: Minted ÷ Holders ≈ ${ratio} (>10 — few holders, heavy mint, possible wash/control)`,
     },
   };
 
@@ -137,41 +160,74 @@
     return nav.startsWith("zh") ? "zh" : "en";
   }
 
+  function detectTheme() {
+    try {
+      const saved = localStorage.getItem(THEME_KEY);
+      if (saved === "light" || saved === "dark") return saved;
+    } catch {
+      /* ignore */
+    }
+    // Prefer explicit attribute from FOUC script; else dark product default
+    const attr = document.documentElement.getAttribute("data-theme");
+    if (attr === "light" || attr === "dark") return attr;
+    return "dark";
+  }
+
   /** Fixed ranking window: who appears on the board (5m/30m/1h columns carry the volume detail). */
   const RANK_WINDOW_MIN = 60;
 
   let lang = detectLang();
+  let theme = detectTheme();
+  /** @type {"all"|"free"|"paid"} */
+  let priceFilter = loadPriceFilter();
   let timer = null;
   let lastFeedKeys = new Set();
   /** last successful API payload — re-render on language switch */
   let lastData = null;
+  let blockedPanelOpen = false;
+  let favoritesPanelOpen = false;
+  /** Ignore document-level close for the same click that opened the panel */
+  let blockedIgnoreOutsideUntil = 0;
+  let favoritesIgnoreOutsideUntil = 0;
   /** @type {Set<string>} */
   let blocked = loadBlocked();
   /** @type {Map<string, {name?: string, symbol?: string}>} */
   let blockedMeta = loadBlockedMeta();
+  /** @type {Set<string>} */
+  let favorites = loadFavorites();
+  /** @type {Map<string, {name?: string, symbol?: string, icon?: string, opensea?: string}>} */
+  let favoritesMeta = loadFavoritesMeta();
+  /** Broken icon URLs — never retry (stops letter/img flicker on poll re-render) */
+  /** @type {Set<string>} */
+  const brokenIconUrls = new Set();
+  /** contract → last failed icon URL (sticky until URL changes) */
+  /** @type {Map<string, string>} */
+  const brokenIconByContract = new Map();
 
   const els = {
-    livePill: $("livePill"),
-    liveText: $("liveText"),
-    kLeader: $("kLeader"),
-    kVel: $("kVel"),
-    kMinters: $("kMinters"),
-    kCols: $("kCols"),
-    kNew: $("kNew"),
-    kLast: $("kLast"),
-    kBlock: $("kBlock"),
+    btnWallet: $("btnWallet"),
     hotBody: $("hotBody"),
     feed: $("feed"),
+    mintedOut: $("mintedOut"),
     statusLine: $("statusLine"),
-    hideLp: $("hideLp"),
-    onlyPaid: $("onlyPaid"),
     btnRefresh: $("btnRefresh"),
     btnBlocked: $("btnBlocked"),
     blockedPanel: $("blockedPanel"),
     blockedList: $("blockedList"),
     blockedEmpty: $("blockedEmpty"),
     btnClearBlocked: $("btnClearBlocked"),
+    btnFavorites: $("btnFavorites"),
+    favoritesPanel: $("favoritesPanel"),
+    favoritesList: $("favoritesList"),
+    favoritesEmpty: $("favoritesEmpty"),
+    btnClearFavorites: $("btnClearFavorites"),
   };
+
+  /** Injected wallet (MetaMask etc.) — UI only for now, no trades */
+  const RH_CHAIN_HEX = "0x1237"; // 4663
+  /** @type {string|null} */
+  let walletAddress = null;
+  let walletBusy = false;
 
   function loadBlocked() {
     try {
@@ -245,10 +301,137 @@
     else updateBlockedUi();
   }
 
+  function loadFavorites() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(FAV_KEY) || "[]");
+      if (!Array.isArray(raw)) return new Set();
+      return new Set(raw.map((a) => String(a || "").toLowerCase()).filter(Boolean));
+    } catch {
+      return new Set();
+    }
+  }
+
+  function loadFavoritesMeta() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(FAV_META_KEY) || "{}");
+      const map = new Map();
+      if (raw && typeof raw === "object") {
+        for (const [k, v] of Object.entries(raw)) {
+          map.set(String(k).toLowerCase(), v || {});
+        }
+      }
+      return map;
+    } catch {
+      return new Map();
+    }
+  }
+
+  function persistFavorites() {
+    try {
+      localStorage.setItem(FAV_KEY, JSON.stringify([...favorites]));
+      const obj = {};
+      for (const [k, v] of favoritesMeta.entries()) {
+        if (favorites.has(k)) obj[k] = v;
+      }
+      localStorage.setItem(FAV_META_KEY, JSON.stringify(obj));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function isFavorite(contract) {
+    return favorites.has(String(contract || "").toLowerCase());
+  }
+
+  function openseaUrl(contract, row) {
+    const c = String(contract || row?.contract || "").trim();
+    if (row?.opensea) return String(row.opensea);
+    if (!c) return null;
+    return `https://opensea.io/contract/robinhood/${c}`;
+  }
+
+  function favoriteMetaFromRow(row) {
+    const icon = iconUrlOf(row);
+    const c = String(row?.contract || "").toLowerCase();
+    return {
+      name: row?.name || null,
+      symbol: row?.symbol || null,
+      icon: icon || null,
+      opensea: openseaUrl(c, row),
+    };
+  }
+
+  function favoriteContract(row) {
+    const c = String(row?.contract || "").toLowerCase();
+    if (!c || c.length < 10) return;
+    favorites.add(c);
+    const prev = favoritesMeta.get(c) || {};
+    const next = favoriteMetaFromRow(row);
+    favoritesMeta.set(c, {
+      name: next.name || prev.name || null,
+      symbol: next.symbol || prev.symbol || null,
+      icon: next.icon || prev.icon || null,
+      opensea: next.opensea || prev.opensea || openseaUrl(c),
+    });
+    persistFavorites();
+    if (lastData) renderAll(lastData);
+    else updateFavoritesUi();
+  }
+
+  function unfavoriteContract(contract) {
+    const c = String(contract || "").toLowerCase();
+    favorites.delete(c);
+    favoritesMeta.delete(c);
+    persistFavorites();
+    if (lastData) renderAll(lastData);
+    else updateFavoritesUi();
+  }
+
+  function toggleFavorite(row) {
+    const c = String(row?.contract || "").toLowerCase();
+    if (!c) return;
+    if (isFavorite(c)) unfavoriteContract(c);
+    else favoriteContract(row);
+  }
+
+  function clearFavorites() {
+    favorites.clear();
+    favoritesMeta.clear();
+    persistFavorites();
+    if (lastData) renderAll(lastData);
+    else updateFavoritesUi();
+  }
+
+  function resolveFavoriteMeta(addr) {
+    const base = favoritesMeta.get(addr) || {};
+    if (lastData) {
+      const all = [...(lastData.hot || []), ...(lastData.feed || [])];
+      const hit = all.find((x) => String(x.contract || "").toLowerCase() === addr);
+      if (hit) {
+        return {
+          name: hit.name || base.name || null,
+          symbol: hit.symbol || base.symbol || null,
+          icon: iconUrlOf(hit) || base.icon || null,
+          opensea: openseaUrl(addr, hit) || base.opensea || null,
+        };
+      }
+    }
+    return {
+      ...base,
+      opensea: base.opensea || openseaUrl(addr),
+    };
+  }
+
   function updateBlockedUi() {
     const n = blocked.size;
     if (els.btnBlocked) {
       els.btnBlocked.textContent = t("blockedBtn", n);
+    }
+    // Re-bind list nodes if panel was moved
+    if (els.blockedPanel) {
+      els.blockedList = els.blockedPanel.querySelector("#blockedList") || $("blockedList");
+      els.blockedEmpty =
+        els.blockedPanel.querySelector("#blockedEmpty") || $("blockedEmpty");
     }
     if (!els.blockedList || !els.blockedEmpty) return;
 
@@ -272,6 +455,56 @@
         </li>`;
       })
       .join("");
+    if (blockedPanelOpen) {
+      try {
+        positionBlockedPanel();
+      } catch {
+        /* ignore if not bound yet */
+      }
+    }
+  }
+
+  function updateFavoritesUi() {
+    const n = favorites.size;
+    if (els.btnFavorites) {
+      els.btnFavorites.textContent = t("favBtn", n);
+    }
+    if (els.favoritesPanel) {
+      els.favoritesList =
+        els.favoritesPanel.querySelector("#favoritesList") || $("favoritesList");
+      els.favoritesEmpty =
+        els.favoritesPanel.querySelector("#favoritesEmpty") || $("favoritesEmpty");
+    }
+    if (!els.favoritesList || !els.favoritesEmpty) return;
+
+    const items = [...favorites];
+    if (!items.length) {
+      els.favoritesList.innerHTML = "";
+      els.favoritesEmpty.hidden = false;
+      return;
+    }
+    els.favoritesEmpty.hidden = true;
+    els.favoritesList.innerHTML = items
+      .map((addr) => {
+        const meta = resolveFavoriteMeta(addr);
+        const name = meta.name || meta.symbol || short(addr);
+        const href = meta.opensea || openseaUrl(addr);
+        return `<li>
+          <div class="b-meta">
+            <a class="b-name" href="${escapeHtml(href)}" target="_blank" rel="noopener" title="OpenSea · ${escapeHtml(name)}">${escapeHtml(name)}</a>
+            <span class="b-addr">${escapeHtml(short(addr))}</span>
+          </div>
+          <button type="button" class="b-un" data-unfav="${escapeHtml(addr)}">${escapeHtml(t("unfavorite"))}</button>
+        </li>`;
+      })
+      .join("");
+    if (favoritesPanelOpen) {
+      try {
+        positionFavoritesPanel();
+      } catch {
+        /* ignore if not bound yet */
+      }
+    }
   }
 
   function t(key, ...args) {
@@ -299,10 +532,50 @@
       el.setAttribute("aria-label", pack[key]);
     });
 
-    document.querySelectorAll(".lang-btn").forEach((btn) => {
-      btn.classList.toggle("active", btn.dataset.lang === lang);
-    });
+    syncLangToggle();
+    applyThemeUi();
+    syncWalletBtn(); // after i18n — keep address label if connected
     updateBlockedUi();
+    updateFavoritesUi();
+    syncPriceFilterUi();
+  }
+
+  function syncThemeToggle() {
+    const btn = document.getElementById("themeToggle");
+    if (btn) btn.textContent = theme === "light" ? "Light" : "Dark";
+  }
+
+  function syncLangToggle() {
+    const btn = document.getElementById("langToggle");
+    if (btn) btn.textContent = lang === "en" ? "EN" : "中文";
+  }
+
+  function applyThemeUi() {
+    document.documentElement.setAttribute("data-theme", theme);
+    syncThemeToggle();
+    const meta = document.getElementById("metaThemeColor");
+    if (meta) {
+      meta.setAttribute(
+        "content",
+        theme === "light" ? "#f4f6fb" : "#0B1220"
+      );
+    }
+  }
+
+  function setTheme(next) {
+    if (next !== "light" && next !== "dark") return;
+    if (next === theme) return;
+    theme = next;
+    try {
+      localStorage.setItem(THEME_KEY, theme);
+    } catch {
+      /* ignore */
+    }
+    applyThemeUi();
+  }
+
+  function toggleTheme() {
+    setTheme(theme === "dark" ? "light" : "dark");
   }
 
   function setLang(next) {
@@ -318,9 +591,220 @@
     if (lastData) {
       renderAll(lastData);
     } else {
-      els.liveText.textContent = t("liveConnecting");
       els.statusLine.textContent = t("statusWaiting");
     }
+  }
+
+  function getEthereum() {
+    return typeof window !== "undefined" ? window.ethereum || null : null;
+  }
+
+  let walletMenuOpen = false;
+  let walletMenuIgnoreOutsideUntil = 0;
+
+  /** Connect label English-only; disconnect follows UI language. */
+  function syncWalletBtn() {
+    const btn = els.btnWallet;
+    if (!btn) return;
+    btn.classList.toggle("is-busy", walletBusy);
+    btn.classList.toggle("is-connected", !!walletAddress && !walletBusy);
+    if (walletBusy) {
+      btn.textContent = "Connecting…";
+      btn.title = "Connecting…";
+      closeWalletMenu();
+      return;
+    }
+    if (walletAddress) {
+      btn.textContent = short(walletAddress);
+      btn.title = `${walletAddress} · ${t("walletDisconnect")}`;
+      return;
+    }
+    btn.textContent = "Connect Wallet";
+    btn.title = "Connect Wallet";
+    closeWalletMenu();
+  }
+
+  function isWalletMenuOpen() {
+    const menu = $("walletMenu");
+    return walletMenuOpen && menu && !menu.hidden;
+  }
+
+  function openWalletMenu() {
+    const menu = $("walletMenu");
+    const btn = els.btnWallet;
+    if (!menu || !btn || !walletAddress) return;
+    walletMenuOpen = true;
+    menu.hidden = false;
+    menu.removeAttribute("hidden");
+    menu.classList.add("is-open");
+    btn.setAttribute("aria-expanded", "true");
+    walletMenuIgnoreOutsideUntil = Date.now() + 200;
+  }
+
+  function closeWalletMenu() {
+    walletMenuOpen = false;
+    const menu = $("walletMenu");
+    const btn = els.btnWallet;
+    if (btn) btn.setAttribute("aria-expanded", "false");
+    if (!menu) return;
+    menu.classList.remove("is-open");
+    menu.hidden = true;
+    menu.setAttribute("hidden", "");
+  }
+
+  function toggleWalletMenu(ev) {
+    if (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+    }
+    if (isWalletMenuOpen()) closeWalletMenu();
+    else openWalletMenu();
+  }
+
+  async function disconnectWallet() {
+    const eth = getEthereum();
+    walletAddress = null;
+    closeWalletMenu();
+    syncWalletBtn();
+    // Best-effort full revoke (MetaMask etc.); not all wallets support it
+    try {
+      if (eth && eth.request) {
+        await eth.request({
+          method: "wallet_revokePermissions",
+          params: [{ eth_accounts: {} }],
+        });
+      }
+    } catch {
+      /* local session already cleared */
+    }
+    syncWalletBtn();
+  }
+
+  async function trySwitchRobinhood(eth) {
+    try {
+      await eth.request({
+        method: "wallet_switchEthereumChain",
+        params: [{ chainId: RH_CHAIN_HEX }],
+      });
+    } catch (e) {
+      // 4902 = chain not added — best-effort add
+      if (e && (e.code === 4902 || e.code === -32603)) {
+        try {
+          await eth.request({
+            method: "wallet_addEthereumChain",
+            params: [
+              {
+                chainId: RH_CHAIN_HEX,
+                chainName: "Robinhood Chain",
+                nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
+                rpcUrls: ["https://rpc.mainnet.chain.robinhood.com"],
+                blockExplorerUrls: ["https://robinhoodchain.blockscout.com"],
+              },
+            ],
+          });
+        } catch {
+          /* ignore — connect still useful without chain switch */
+        }
+      }
+    }
+  }
+
+  async function connectWallet() {
+    const eth = getEthereum();
+    if (!eth) {
+      alert("No wallet found. Install MetaMask or similar.");
+      return;
+    }
+    if (walletBusy) return;
+    walletBusy = true;
+    syncWalletBtn();
+    try {
+      const accounts = await eth.request({ method: "eth_requestAccounts" });
+      const addr = accounts && accounts[0] ? String(accounts[0]) : null;
+      walletAddress = addr ? addr.toLowerCase() : null;
+      if (walletAddress) {
+        // Best-effort; does not block if user stays on another chain
+        trySwitchRobinhood(eth).catch(() => {});
+      }
+    } catch (e) {
+      const code = e && e.code;
+      if (code === 4001) {
+        /* user rejected — quiet */
+      } else {
+        console.warn("[wallet]", e);
+      }
+      // keep previous address if any
+    } finally {
+      walletBusy = false;
+      syncWalletBtn();
+    }
+  }
+
+  async function onWalletBtnClick(ev) {
+    if (walletBusy) return;
+    // Connected → open menu (Disconnect); not connected → connect
+    if (walletAddress) {
+      toggleWalletMenu(ev);
+      return;
+    }
+    closeWalletMenu();
+    await connectWallet();
+  }
+
+  function bindWalletListeners() {
+    const eth = getEthereum();
+    if (!eth || !eth.on) return;
+    eth.on("accountsChanged", (accs) => {
+      const next = accs && accs[0] ? String(accs[0]).toLowerCase() : null;
+      walletAddress = next;
+      if (!walletAddress) closeWalletMenu();
+      syncWalletBtn();
+    });
+    eth.on("chainChanged", () => {
+      // UI-only; no reload required for radar
+      syncWalletBtn();
+    });
+  }
+
+  function bindWalletMenu() {
+    const btnDisc = $("btnDisconnect");
+    if (btnDisc) {
+      btnDisc.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        disconnectWallet();
+      });
+    }
+    document.addEventListener("click", (ev) => {
+      if (!isWalletMenuOpen()) return;
+      if (Date.now() < walletMenuIgnoreOutsideUntil) return;
+      const t = ev.target;
+      if (t && typeof t.closest === "function") {
+        if (t.closest("#btnWallet") || t.closest("#walletMenu")) return;
+      }
+      closeWalletMenu();
+    });
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape" && isWalletMenuOpen()) closeWalletMenu();
+    });
+  }
+
+  async function restoreWalletIfConnected() {
+    const eth = getEthereum();
+    if (!eth) return;
+    try {
+      const accounts = await eth.request({ method: "eth_accounts" });
+      if (accounts && accounts[0]) {
+        walletAddress = String(accounts[0]).toLowerCase();
+        syncWalletBtn();
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function toggleLang() {
+    setLang(lang === "zh" ? "en" : "zh");
   }
 
   function fmtNum(n) {
@@ -344,100 +828,205 @@
     return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
   }
 
-  function setLive(ok, text) {
-    els.livePill.classList.remove("ok", "err");
-    if (ok === true) els.livePill.classList.add("ok");
-    if (ok === false) els.livePill.classList.add("err");
-    els.liveText.textContent = text;
+  /** Display label max length — long names must not blow table width */
+  const NAME_MAX = 15;
+
+  function ellipsize(s, max = NAME_MAX) {
+    const t = String(s ?? "").trim();
+    if (!t) return "";
+    if (t.length <= max) return t;
+    return `${t.slice(0, max)}…`;
   }
 
   function pickHot(data) {
     return data.hot || [];
   }
 
-  function filterHot(list) {
-    let out = list.slice().filter((r) => !isBlocked(r.contract));
-    if (els.hideLp.checked) {
-      out = out.filter(
-        (r) =>
-          !/UNI-V[34]|Positions NFT/i.test(r.name || "") &&
-          !/UNI-V[34]/i.test(r.symbol || "")
-      );
-    }
-    if (els.onlyPaid.checked) {
-      out = out.filter((r) => r.topMethod && r.topMethod !== "null");
-    }
-    return out;
+  /** Always hide Uniswap LP position NFTs (no UI toggle). */
+  function isLpNft(row) {
+    return (
+      /UNI-V[34]|Positions NFT/i.test(row?.name || "") ||
+      /UNI-V[34]/i.test(row?.symbol || "")
+    );
   }
 
-  function renderStats(data) {
-    const st = data.status || {};
-    const hot = filterHot(pickHot(data));
-    const leader = hot[0] || null;
-    const feed = (Array.isArray(data.feed) ? data.feed : []).filter(
-      (e) => !isBlocked(e.contract)
+  function loadPriceFilter() {
+    try {
+      const v = localStorage.getItem(PRICE_FILTER_KEY);
+      if (v === "all" || v === "free" || v === "paid") return v;
+    } catch {
+      /* ignore */
+    }
+    return "all";
+  }
+
+  function persistPriceFilter() {
+    try {
+      localStorage.setItem(PRICE_FILTER_KEY, priceFilter);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /** free | paid | unknown — based on latest known unit price */
+  function priceCategory(r) {
+    if (r?.priceDisplay != null && String(r.priceDisplay).trim() !== "") {
+      const s = String(r.priceDisplay).trim().toLowerCase();
+      if (/\bfree\b|免费/.test(s)) return "free";
+      if (/^0+(\.0+)?(\s*eth)?$/.test(s)) return "free";
+      const m = s.match(/([0-9]*\.?[0-9]+)\s*eth/);
+      if (m) {
+        const n = Number(m[1]);
+        if (Number.isFinite(n)) return n > 0 ? "paid" : "free";
+      }
+    }
+    const eth = r?.priceEth ?? r?.priceMinEth ?? r?.priceLastEth;
+    if (eth != null && eth !== "") {
+      const n = Number(eth);
+      if (Number.isFinite(n)) return n > 0 ? "paid" : "free";
+    }
+    const wei = r?.priceWei ?? r?.priceLastWei;
+    if (wei != null && wei !== "") {
+      try {
+        // string wei may be large — treat non-zero as paid
+        if (String(wei) === "0") return "free";
+        if (/^[0-9]+$/.test(String(wei)) && BigInt(String(wei)) > 0n) return "paid";
+      } catch {
+        /* ignore */
+      }
+    }
+    return "unknown";
+  }
+
+  let priceFilterMenuOpen = false;
+  let priceFilterIgnoreOutsideUntil = 0;
+
+  function setPriceFilter(next) {
+    if (next !== "free" && next !== "paid" && next !== "all") return;
+    if (priceFilter === next) {
+      closePriceFilterMenu();
+      return;
+    }
+    priceFilter = next;
+    persistPriceFilter();
+    syncPriceFilterUi();
+    closePriceFilterMenu();
+    if (lastData) renderAll(lastData);
+  }
+
+  function isPriceFilterMenuOpen() {
+    const menu = $("priceFilterMenu");
+    return (
+      priceFilterMenuOpen &&
+      menu &&
+      !menu.hidden &&
+      menu.classList.contains("is-open")
     );
+  }
 
-    if (leader) {
-      const name = leader.name || leader.symbol || short(leader.contract);
-      const vol1h =
-        leader.mints1h != null ? fmtNum(leader.mints1h) : fmtNum(leader.mints);
-      els.kLeader.textContent = `${name} · ${vol1h} / 1h`;
-      els.kLeader.title = leader.contract || "";
-      els.kVel.textContent =
-        leader.mints5m != null ? `${fmtNum(leader.mints5m)} / 5m` : "—";
-      els.kMinters.textContent =
-        leader.uniqueMinters != null
-          ? `${fmtNum(leader.uniqueMinters)} ${t("addresses")}`
-          : "—";
-    } else {
-      els.kLeader.textContent = t("none");
-      els.kLeader.title = "";
-      els.kVel.textContent = "—";
-      els.kMinters.textContent = "—";
+  function positionPriceFilterMenu() {
+    const btn = $("btnPriceFilter");
+    const menu = $("priceFilterMenu");
+    if (!btn || !menu || !isPriceFilterMenuOpen()) return;
+    const rect = btn.getBoundingClientRect();
+    const gap = 6;
+    const width = Math.max(104, menu.offsetWidth || 104);
+    let left = rect.left;
+    if (left + width > window.innerWidth - 8) {
+      left = Math.max(8, window.innerWidth - width - 8);
     }
-
-    if (hot.length) {
-      const unit = t("colsUnit");
-      els.kCols.textContent = unit
-        ? `${hot.length} ${unit}`
-        : String(hot.length);
-    } else {
-      els.kCols.textContent = "0";
-    }
-
-    const newish = hot.filter((r) => {
-      const supply = Number(r.totalSupply);
-      const holders = Number(r.holders);
-      const lowSupply = Number.isFinite(supply) && supply > 0 && supply < 500;
-      const lowHolders =
-        Number.isFinite(holders) && holders > 0 && holders < 200;
-      return lowSupply || lowHolders;
+    let top = rect.bottom + gap;
+    menu.style.position = "fixed";
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+    menu.style.right = "auto";
+    requestAnimationFrame(() => {
+      if (!isPriceFilterMenuOpen()) return;
+      const h = menu.offsetHeight || 80;
+      if (top + h > window.innerHeight - 8 && rect.top > h + gap) {
+        menu.style.top = `${Math.max(8, rect.top - h - gap)}px`;
+      }
     });
-    if (newish.length) {
-      const top = newish[0];
-      els.kNew.textContent = `${newish.length} · ${top.name || top.symbol || "—"}`;
-      els.kNew.title = newish
-        .slice(0, 5)
-        .map((r) => r.name || r.symbol)
-        .join(", ");
-    } else {
-      els.kNew.textContent = "0";
-      els.kNew.title = "";
-    }
+  }
 
-    const last = feed[0];
-    if (last?.timestamp) {
-      const who = last.name || last.symbol || short(last.contract);
-      els.kLast.textContent = `${relTime(last.timestamp)} · ${who}`;
-      els.kLast.title = last.txHash || "";
-    } else {
-      els.kLast.textContent = "—";
-      els.kLast.title = "";
+  function openPriceFilterMenu() {
+    const btn = $("btnPriceFilter");
+    let menu = $("priceFilterMenu");
+    if (!btn || !menu) return;
+    // Body layer so sticky/overflow table does not clip the menu
+    if (menu.parentElement !== document.body) {
+      document.body.appendChild(menu);
     }
+    priceFilterMenuOpen = true;
+    menu.hidden = false;
+    menu.removeAttribute("hidden");
+    menu.classList.add("is-open");
+    btn.setAttribute("aria-expanded", "true");
+    syncPriceFilterUi();
+    positionPriceFilterMenu();
+    priceFilterIgnoreOutsideUntil = Date.now() + 200;
+  }
 
-    els.kBlock.textContent =
-      st.latestBlock != null ? fmtNum(st.latestBlock) : "—";
+  function closePriceFilterMenu() {
+    priceFilterMenuOpen = false;
+    const btn = $("btnPriceFilter");
+    const menu = $("priceFilterMenu");
+    if (btn) btn.setAttribute("aria-expanded", "false");
+    if (!menu) return;
+    menu.classList.remove("is-open");
+    menu.hidden = true;
+    menu.setAttribute("hidden", "");
+  }
+
+  function togglePriceFilterMenu(ev) {
+    if (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+    }
+    if (isPriceFilterMenuOpen()) closePriceFilterMenu();
+    else openPriceFilterMenu();
+  }
+
+  function syncPriceFilterUi() {
+    const btn = $("btnPriceFilter");
+    if (btn) {
+      btn.classList.toggle("is-active", priceFilter === "free" || priceFilter === "paid");
+      const title = t("priceFilterTitle");
+      btn.title = title;
+      btn.setAttribute("aria-label", title);
+    }
+    document.querySelectorAll("[data-price-filter]").forEach((el) => {
+      const mode = el.getAttribute("data-price-filter");
+      const on = mode === priceFilter;
+      el.classList.toggle("active", on);
+      el.setAttribute("aria-checked", on ? "true" : "false");
+    });
+  }
+
+  function filterHot(list) {
+    return list
+      .slice()
+      .filter((r) => !isBlocked(r.contract) && !isLpNft(r))
+      .filter((r) => {
+        if (priceFilter === "all") return true;
+        const cat = priceCategory(r);
+        if (priceFilter === "free") return cat === "free";
+        if (priceFilter === "paid") return cat === "paid";
+        return true;
+      });
+  }
+
+  /** Single reference price only — Free or one ETH amount (no ranges). */
+  function formatPriceCell(r) {
+    if (r.priceDisplay) {
+      let s = String(r.priceDisplay);
+      if (lang === "zh") s = s.replace(/\bFree\b/g, t("priceFree"));
+      return s;
+    }
+    const eth = r.priceEth ?? r.priceMinEth ?? r.priceLastEth;
+    if (eth == null) return t("pricePending");
+    if (eth === "0") return t("priceFree");
+    return `${eth} ETH`;
   }
 
   function renderHot(data) {
@@ -450,34 +1039,46 @@
       return;
     }
 
-    const maxMints = Math.max(...list.map((r) => r.mints1h || r.mints || 0), 1);
-
     els.hotBody.innerHTML = list
       .map((r, i) => {
         const rankClass = i < 3 ? "rank top" : "rank";
-        const pct = Math.round(((r.mints1h || 0) / maxMints) * 100);
+        const priceText = formatPriceCell(r);
+        const priceTitle = priceText;
+        const fullName = r.name || "Unknown";
+        const fullSym = String(r.symbol || "").trim();
+        const symShow = ellipsize(fullSym);
+        // symbol only — no contract address (OpenSea / explorer cover that)
+        const metaHtml = symShow
+          ? `<span class="meta" title="${escapeHtml(fullSym)}">${escapeHtml(symShow)}</span>`
+          : `<span class="meta meta-empty" aria-hidden="true"></span>`;
         return `<tr>
           <td class="${rankClass}">${i + 1}</td>
           <td>
             <div class="col-row">
-              ${avatarHtml(r)}
+              <div class="col-media">
+                ${avatarHtml(r)}
+                ${mintProgressHtml(r)}
+              </div>
               <div class="col-name">
-                <a class="name" href="${r.explorerToken}" target="_blank" rel="noopener">${escapeHtml(r.name || "Unknown")}</a>
-                <span class="meta">${escapeHtml(r.symbol || "")} · ${escapeHtml(r.short || short(r.contract))}</span>
+                <div class="name-row">
+                  <a class="name" href="${r.explorerToken}" target="_blank" rel="noopener" title="${escapeHtml(fullName)}">${escapeHtml(ellipsize(fullName))}</a>
+                  ${riskBadgeHtml(r)}
+                  ${starBtnHtml(r)}
+                </div>
+                ${metaHtml}
                 <span class="meta links">
                   ${socialsHtml(r)}
                   <a class="explorer-link" href="${r.explorerToken}" target="_blank" rel="noopener" title="Blockscout">${escapeHtml(t("explorer"))}</a>
                 </span>
-                <div class="bar"><i style="width:${pct}%"></i></div>
               </div>
             </div>
           </td>
-          <td class="num">${fmtNum(r.uniqueMinters)}</td>
           <td class="num">${fmtNum(r.mints5m)}</td>
           <td class="num">${fmtNum(r.mints30m)}</td>
           <td class="num">${fmtNum(r.mints1h)}</td>
+          <td class="num price-cell" title="${escapeHtml(priceTitle)}">${escapeHtml(priceText)}</td>
           <td class="num">${fmtNum(r.holders)}</td>
-          <td class="num">${fmtNum(r.totalSupply)}</td>
+          <td class="num">${fmtNum(r.minted ?? r.totalSupply)}</td>
           <td>
             <a href="${r.explorerTx}" target="_blank" rel="noopener" class="num">${relTime(r.lastMintAt)}</a>
           </td>
@@ -488,17 +1089,7 @@
 
   function renderFeed(data) {
     let feed = Array.isArray(data.feed) ? data.feed : [];
-    feed = feed.filter((e) => !isBlocked(e.contract));
-    if (els.hideLp.checked) {
-      feed = feed.filter(
-        (e) =>
-          !/UNI-V[34]|Positions NFT/i.test(e.name || "") &&
-          !/UNI-V[34]/i.test(e.symbol || "")
-      );
-    }
-    if (els.onlyPaid.checked) {
-      feed = feed.filter((e) => e.method);
-    }
+    feed = feed.filter((e) => !isBlocked(e.contract) && !isLpNft(e));
 
     if (!feed.length) {
       els.feed.innerHTML = `<div class="empty">${escapeHtml(t("feedEmpty"))}</div>`;
@@ -517,7 +1108,11 @@
           <div class="feed-top">
             <div class="feed-title">
               ${avatarHtml(e)}
-              <a class="name" href="${e.explorerToken}" target="_blank" rel="noopener">${escapeHtml(e.name || "Unknown")}</a>
+              <div class="name-row">
+                <a class="name" href="${e.explorerToken}" target="_blank" rel="noopener" title="${escapeHtml(e.name || "Unknown")}">${escapeHtml(ellipsize(e.name || "Unknown"))}</a>
+                ${riskBadgeHtml(e)}
+                ${starBtnHtml(e)}
+              </div>
               ${socialsHtml(e)}
             </div>
             <span class="time">${relTime(e.timestamp)}</span>
@@ -526,9 +1121,62 @@
             <span>#${escapeHtml(String(e.tokenId ?? "?"))}</span>
             <span>${escapeHtml(e.symbol || "")}</span>
             ${method}
+            <span class="price-tag">${escapeHtml(
+              e.unitPriceEth == null
+                ? t("pricePending")
+                : e.unitPriceEth === "0"
+                  ? t("priceFree")
+                  : `${e.unitPriceEth} ETH`
+            )}</span>
             <a href="${e.explorerMinter}" target="_blank" rel="noopener">${escapeHtml(t("minter"))} ${escapeHtml(e.minterShort || short(e.minter))}</a>
             <a href="${e.explorerTx}" target="_blank" rel="noopener">tx ↗</a>
-            <span>blk ${fmtNum(e.blockNumber)}</span>
+          </div>
+        </article>`;
+      })
+      .join("");
+  }
+
+  /** Bottom-right: sold-out collections (same card scroll pattern as live feed). */
+  function renderMintedOut(data) {
+    if (!els.mintedOut) return;
+    let list = Array.isArray(data.mintedOut) ? data.mintedOut : [];
+    list = list.filter((r) => !isBlocked(r.contract) && !isLpNft(r));
+
+    if (!list.length) {
+      els.mintedOut.innerHTML = `<div class="empty">${escapeHtml(t("outEmpty"))}</div>`;
+      return;
+    }
+
+    els.mintedOut.innerHTML = list
+      .map((r) => {
+        const fullName = r.name || "Unknown";
+        const priceText = formatPriceCell(r);
+        const minted = r.minted ?? r.totalSupply;
+        const max = r.maxSupply;
+        const supplyLabel =
+          max != null && minted != null
+            ? `${fmtNum(minted)} / ${fmtNum(max)}`
+            : fmtNum(minted);
+        return `<article class="feed-item is-out">
+          <div class="feed-top">
+            <div class="feed-title">
+              ${avatarHtml(r)}
+              <div class="name-row">
+                <a class="name" href="${r.explorerToken || "#"}" target="_blank" rel="noopener" title="${escapeHtml(fullName)}">${escapeHtml(ellipsize(fullName))}</a>
+                ${riskBadgeHtml(r)}
+                ${starBtnHtml(r)}
+              </div>
+              ${socialsHtml(r)}
+            </div>
+            <span class="time">${relTime(r.lastMintAt)}</span>
+          </div>
+          <div class="out-meta">
+            <span class="pill-out">${escapeHtml(t("mintOut"))}</span>
+            <span class="price-tag">${escapeHtml(priceText)}</span>
+            <span>supply ${escapeHtml(String(supplyLabel))}</span>
+            <span>holders ${fmtNum(r.holders)}</span>
+            <a href="${r.opensea || openseaUrl(r.contract, r) || "#"}" target="_blank" rel="noopener">OpenSea ↗</a>
+            <a class="explorer-link" href="${r.explorerToken || "#"}" target="_blank" rel="noopener">${escapeHtml(t("explorer"))}</a>
           </div>
         </article>`;
       })
@@ -536,19 +1184,23 @@
   }
 
   function renderStatus(data) {
+    // Poll health stays in hidden statusLine only (header is wallet CTA now)
     const st = data.status || {};
-    if (st.lastError) {
-      setLive(false, t("livePollErr"));
+    const pollAgeMs = st.lastPollAt
+      ? Date.now() - new Date(st.lastPollAt).getTime()
+      : Infinity;
+    const dataFresh =
+      (st.storeSize || 0) > 0 && Number.isFinite(pollAgeMs) && pollAgeMs < 45_000;
+
+    if (st.lastError && !dataFresh) {
       els.statusLine.textContent = t(
         "statusError",
         st.lastError,
         st.pollCount || 0
       );
-    } else if (!st.pollCount) {
-      setLive(null, t("liveWarm"));
+    } else if (!st.pollCount && !dataFresh) {
       els.statusLine.textContent = t("statusWarm");
     } else {
-      setLive(true, t("liveOk"));
       els.statusLine.textContent = t(
         "statusOk",
         relTime(st.lastPollAt),
@@ -561,11 +1213,12 @@
   }
 
   function renderAll(data) {
-    renderStats(data);
     renderHot(data);
     renderFeed(data);
+    renderMintedOut(data);
     renderStatus(data);
     updateBlockedUi();
+    updateFavoritesUi();
   }
 
   function escapeHtml(s) {
@@ -576,24 +1229,180 @@
       .replace(/"/g, "&quot;");
   }
 
+  /** Stable monogram: first letter/digit/CJK of name (fallback symbol / ?) */
+  function avatarLetter(r) {
+    const raw = String(r.name || r.symbol || r.short || "?").trim();
+    const m = raw.match(/[A-Za-z0-9\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/);
+    const ch = (m && m[0]) || raw.charAt(0) || "?";
+    return ch.toUpperCase();
+  }
+
+  function iconUrlOf(r) {
+    const u = String(r?.icon || "").trim();
+    return u || "";
+  }
+
+  function canUseIcon(r) {
+    const icon = iconUrlOf(r);
+    if (!icon) return false;
+    if (brokenIconUrls.has(icon)) return false;
+    const c = String(r.contract || "").toLowerCase();
+    if (c && brokenIconByContract.get(c) === icon) return false;
+    return true;
+  }
+
+  function markIconBroken(contract, url) {
+    const u = String(url || "").trim();
+    const c = String(contract || "").toLowerCase();
+    if (u) brokenIconUrls.add(u);
+    if (c && u) brokenIconByContract.set(c, u);
+  }
+
+  function letterAvatarHtml(letter) {
+    return `<div class="avatar ph" aria-hidden="true">${escapeHtml(letter)}</div>`;
+  }
+
+  function starBtnHtml(r) {
+    const contractRaw = String(r.contract || "").toLowerCase();
+    const contract = escapeHtml(contractRaw);
+    const favOn = isFavorite(contractRaw);
+    const starLabel = escapeHtml(favOn ? t("unfavoriteTitle") : t("favoriteTitle"));
+    return `<button type="button" class="star-btn${favOn ? " is-on" : ""}" data-fav="${contract}" title="${starLabel}" aria-label="${starLabel}" aria-pressed="${favOn ? "true" : "false"}">${STAR_SVG}</button>`;
+  }
+
+  /** Real mint progress: minted / maxSupply. Sold out → MINT OUT. Never heat ranking. */
+  function mintProgressHtml(r) {
+    const minted = Number(r?.minted ?? r?.totalSupply);
+    const max = Number(r?.maxSupply);
+    const hasMax = Number.isFinite(max) && max > 0;
+    const hasMinted = Number.isFinite(minted) && minted >= 0;
+
+    if (hasMax && hasMinted) {
+      const pctRaw = (minted / max) * 100;
+      const pct = Math.max(0, Math.min(100, Math.round(pctRaw)));
+      const soldOut = r?.mintedOut === true || minted >= max;
+      const title = escapeHtml(
+        t("mintProgressTitle", fmtNum(minted), fmtNum(max), pct)
+      );
+      if (soldOut) {
+        return `<div class="mint-progress is-out" title="${title}">
+          <span class="mint-out-label">${escapeHtml(t("mintOut"))}</span>
+        </div>`;
+      }
+      // Visible progress % (not hover-only; not 1h heat)
+      return `<div class="mint-progress" title="${title}">
+        <div class="mint-progress-track" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100" aria-label="${title}">
+          <i style="width:${pct}%"></i>
+        </div>
+        <span class="mint-progress-pct">${pct}%</span>
+      </div>`;
+    }
+
+    // No maxSupply yet — empty track + dash (still not heat)
+    return `<div class="mint-progress is-unknown" title="${escapeHtml(t("mintProgressUnknown"))}">
+      <div class="mint-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuetext="unknown">
+        <i style="width:0%"></i>
+      </div>
+      <span class="mint-progress-pct is-muted">—</span>
+    </div>`;
+  }
+
+  /**
+   * High risk when Minted / Holders > 10
+   * (few wallets holding many mints → possible internal/control minting).
+   * Requires both numbers to be valid and holders > 0.
+   */
+  function mintHolderRatio(r) {
+    const minted = Number(r?.minted ?? r?.totalSupply);
+    const holders = Number(r?.holders);
+    if (!Number.isFinite(minted) || !Number.isFinite(holders) || holders <= 0) {
+      return null;
+    }
+    if (minted < 0) return null;
+    return minted / holders;
+  }
+
+  function isHighRisk(r) {
+    const ratio = mintHolderRatio(r);
+    return ratio != null && ratio > 10;
+  }
+
+  function riskBadgeHtml(r) {
+    if (!isHighRisk(r)) return "";
+    const ratio = mintHolderRatio(r);
+    const ratioText =
+      ratio >= 100 ? String(Math.round(ratio)) : ratio.toFixed(1).replace(/\.0$/, "");
+    const title = escapeHtml(t("highRiskTitle", ratioText));
+    // Red emergency siren — top rays flash (CSS easter egg)
+    return `<span class="risk-badge" title="${title}" aria-label="${title}" role="img">
+      <svg class="risk-badge-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path class="siren-ray siren-ray-l" fill="currentColor" d="M4.49 3.7l1.06-1.06 2.12 2.12-1.06 1.06L4.49 3.7z"/>
+        <path class="siren-ray siren-ray-c" fill="currentColor" d="M11.25 1.5h1.5v3h-1.5v-3z"/>
+        <path class="siren-ray siren-ray-r" fill="currentColor" d="M18.45 3.7l1.06 1.06-2.12 2.12-1.06-1.06 2.12-2.12z"/>
+        <path class="siren-dome" fill="currentColor" d="M7.25 11c0-2.76 2.13-5 4.75-5s4.75 2.24 4.75 5v4.25H7.25V11z"/>
+        <path fill="currentColor" d="M5.5 15.75h13v2.1a1.15 1.15 0 0 1-1.15 1.15H6.65A1.15 1.15 0 0 1 5.5 17.85v-2.1z"/>
+        <path fill="currentColor" d="M4.75 19.4h14.5v1.85H4.75V19.4z"/>
+      </svg>
+    </span>`;
+  }
+
+  /** Google reverse image search (Lens by image URL). */
+  function googleLensUrl(imageUrl) {
+    const u = String(imageUrl || "").trim();
+    if (!u || !/^https?:\/\//i.test(u)) return null;
+    return `https://lens.google.com/uploadbyurl?url=${encodeURIComponent(u)}`;
+  }
+
   function avatarHtml(r) {
     const name = escapeHtml(r.name || "?");
-    const letter = escapeHtml(
-      (r.name || r.symbol || "?").slice(0, 1).toUpperCase()
-    );
-    const contract = escapeHtml(String(r.contract || "").toLowerCase());
+    const letter = avatarLetter(r);
+    const contractRaw = String(r.contract || "").toLowerCase();
+    const contract = escapeHtml(contractRaw);
     const blockLabel = escapeHtml(t("blockTitle"));
+    const searchLabel = escapeHtml(t("googleSearchTitle"));
     let face;
-    if (r.icon) {
-      face = `<img class="avatar" src="${escapeHtml(r.icon)}" alt="${name}" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.replaceWith(Object.assign(document.createElement('div'),{className:'avatar ph',textContent:'${letter}'}))" />`;
+    let searchHtml = "";
+    if (canUseIcon(r)) {
+      const rawIcon = iconUrlOf(r);
+      const src = escapeHtml(rawIcon);
+      face = `<img class="avatar" src="${src}" alt="${name}" loading="lazy" decoding="async" referrerpolicy="no-referrer" data-contract="${contract}" data-letter="${escapeHtml(letter)}" />`;
+      const lens = googleLensUrl(rawIcon);
+      if (lens) {
+        searchHtml = `<a class="img-search" href="${escapeHtml(lens)}" target="_blank" rel="noopener noreferrer" title="${searchLabel}" aria-label="${searchLabel}">${SEARCH_SVG}</a>`;
+      }
     } else {
-      face = `<div class="avatar ph">${letter}</div>`;
+      face = letterAvatarHtml(letter);
     }
     return `<div class="avatar-wrap">
       ${face}
+      ${searchHtml}
       <button type="button" class="block-btn" data-block="${contract}" title="${blockLabel}" aria-label="${blockLabel}">${EYE_SLASH_SVG}</button>
     </div>`;
   }
+
+  // Capture-phase: failed logos → letter, cache so later polls don't re-insert broken <img>
+  document.addEventListener(
+    "error",
+    (ev) => {
+      const img = ev.target;
+      if (!(img instanceof HTMLImageElement)) return;
+      if (!img.classList.contains("avatar")) return;
+      const url = img.currentSrc || img.src || "";
+      const contract = img.getAttribute("data-contract") || "";
+      markIconBroken(contract, url);
+      const letter = img.getAttribute("data-letter") || "?";
+      const wrap = img.closest(".avatar-wrap");
+      if (wrap) {
+        wrap.querySelectorAll(".img-search").forEach((el) => el.remove());
+      }
+      const ph = document.createElement("div");
+      ph.className = "avatar ph";
+      ph.setAttribute("aria-hidden", "true");
+      ph.textContent = letter;
+      img.replaceWith(ph);
+    },
+    true
+  );
 
   const ICONS = {
     x: `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.727-8.835L1.254 2.25H8.08l4.253 5.622L18.244 2.25zm-1.161 17.52h1.833L7.084 4.126H5.117L17.083 19.77z"/></svg>`,
@@ -610,11 +1419,7 @@
   }
 
   function socialsHtml(r) {
-    const os =
-      r.opensea ||
-      (r.contract
-        ? `https://opensea.io/contract/robinhood/${r.contract}`
-        : null);
+    const os = openseaUrl(r.contract, r);
     return `<span class="icon-row">
       ${iconBtn("x", r.twitter || null, "X / Twitter")}
       ${iconBtn("web", r.website || null, "Website")}
@@ -637,44 +1442,100 @@
       lastData = data;
       renderAll(data);
     } catch (e) {
-      setLive(false, t("liveFail"));
       els.statusLine.textContent = e.message || String(e);
     }
   }
 
-  document.querySelectorAll(".lang-btn").forEach((btn) => {
-    btn.addEventListener("click", () => setLang(btn.dataset.lang));
-  });
+  // One-tap cycle: Light↔Dark, 中文↔EN (no popup)
+  const themeToggle = document.getElementById("themeToggle");
+  const langToggle = document.getElementById("langToggle");
+  if (themeToggle) themeToggle.addEventListener("click", () => toggleTheme());
+  if (langToggle) langToggle.addEventListener("click", () => toggleLang());
 
-  els.hideLp.addEventListener("change", () => {
-    if (lastData) renderAll(lastData);
-    else refresh();
-  });
-  els.onlyPaid.addEventListener("change", () => {
-    if (lastData) renderAll(lastData);
-    else refresh();
-  });
+  if (els.btnWallet) {
+    els.btnWallet.addEventListener("click", (ev) => onWalletBtnClick(ev));
+  }
+  bindWalletListeners();
+  bindWalletMenu();
+  restoreWalletIfConnected();
+  syncWalletBtn();
+
   els.btnRefresh.addEventListener("click", () => refresh());
+  syncPriceFilterUi();
+  closePriceFilterMenu();
+  window.addEventListener("resize", positionPriceFilterMenu);
+  window.addEventListener("scroll", positionPriceFilterMenu, true);
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && isPriceFilterMenuOpen()) closePriceFilterMenu();
+  });
 
-  // One-click block from hot list / live feed
+  function rowFromContract(addr) {
+    let row = { contract: addr };
+    if (lastData) {
+      const all = [...(lastData.hot || []), ...(lastData.feed || [])];
+      const hit = all.find(
+        (x) => String(x.contract || "").toLowerCase() === addr
+      );
+      if (hit) row = hit;
+    } else if (isFavorite(addr)) {
+      const meta = favoritesMeta.get(String(addr || "").toLowerCase()) || {};
+      row = { contract: addr, ...meta };
+    }
+    return row;
+  }
+
+  // One-click favorite / block / price filter from hot list / live feed
   document.addEventListener("click", (ev) => {
+    const trigger = ev.target.closest("#btnPriceFilter");
+    if (trigger) {
+      togglePriceFilterMenu(ev);
+      return;
+    }
+
+    const priceOpt = ev.target.closest("[data-price-filter]");
+    if (priceOpt) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      setPriceFilter(priceOpt.getAttribute("data-price-filter"));
+      return;
+    }
+
+    if (isPriceFilterMenuOpen()) {
+      if (Date.now() >= priceFilterIgnoreOutsideUntil) {
+        const t = ev.target;
+        if (
+          !t ||
+          typeof t.closest !== "function" ||
+          (!t.closest("#priceFilterMenu") && !t.closest("#btnPriceFilter"))
+        ) {
+          closePriceFilterMenu();
+        }
+      }
+    }
+
+    const favEl = ev.target.closest("[data-fav]");
+    if (favEl) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const addr = favEl.getAttribute("data-fav");
+      toggleFavorite(rowFromContract(addr));
+      return;
+    }
+
+    const unfavEl = ev.target.closest("[data-unfav]");
+    if (unfavEl) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      unfavoriteContract(unfavEl.getAttribute("data-unfav"));
+      return;
+    }
+
     const blockEl = ev.target.closest("[data-block]");
     if (blockEl) {
       ev.preventDefault();
       ev.stopPropagation();
       const addr = blockEl.getAttribute("data-block");
-      let row = { contract: addr };
-      if (lastData) {
-        const all = [
-          ...(lastData.hot || []),
-          ...(lastData.feed || []),
-        ];
-        const hit = all.find(
-          (x) => String(x.contract || "").toLowerCase() === addr
-        );
-        if (hit) row = hit;
-      }
-      blockContract(row);
+      blockContract(rowFromContract(addr));
       return;
     }
 
@@ -687,30 +1548,216 @@
     }
   });
 
-  if (els.btnBlocked && els.blockedPanel) {
-    els.btnBlocked.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      const open = els.blockedPanel.hasAttribute("hidden");
-      if (open) {
-        els.blockedPanel.removeAttribute("hidden");
-        updateBlockedUi();
-      } else {
-        els.blockedPanel.setAttribute("hidden", "");
+  function isBlockedPanelOpen() {
+    return (
+      blockedPanelOpen &&
+      els.blockedPanel &&
+      els.blockedPanel.classList.contains("is-open")
+    );
+  }
+
+  function isFavoritesPanelOpen() {
+    return (
+      favoritesPanelOpen &&
+      els.favoritesPanel &&
+      els.favoritesPanel.classList.contains("is-open")
+    );
+  }
+
+  function positionDropdownPanel(panel, btn) {
+    if (!panel || !btn) return;
+    const rect = btn.getBoundingClientRect();
+    const gap = 8;
+    const width = Math.min(320, window.innerWidth * 0.86);
+    let left = rect.right - width;
+    if (left < 8) left = 8;
+    if (left + width > window.innerWidth - 8) {
+      left = Math.max(8, window.innerWidth - width - 8);
+    }
+    const top = rect.bottom + gap;
+    panel.style.width = `${width}px`;
+    panel.style.left = `${left}px`;
+    panel.style.right = "auto";
+    panel.style.top = `${top}px`;
+    requestAnimationFrame(() => {
+      if (!panel.classList.contains("is-open")) return;
+      const h = panel.offsetHeight || 200;
+      if (top + h > window.innerHeight - 8 && rect.top > h + gap) {
+        panel.style.top = `${Math.max(8, rect.top - h - gap)}px`;
       }
     });
   }
-  if (els.btnClearBlocked) {
-    els.btnClearBlocked.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      clearBlocked();
-    });
-  }
-  document.addEventListener("click", (ev) => {
-    if (!els.blockedPanel || els.blockedPanel.hasAttribute("hidden")) return;
-    if (ev.target.closest(".blocked-wrap")) return;
-    els.blockedPanel.setAttribute("hidden", "");
-  });
 
+  function positionBlockedPanel() {
+    if (!els.blockedPanel || !els.btnBlocked || !isBlockedPanelOpen()) return;
+    positionDropdownPanel(els.blockedPanel, els.btnBlocked);
+  }
+
+  function positionFavoritesPanel() {
+    if (!els.favoritesPanel || !els.btnFavorites || !isFavoritesPanelOpen()) return;
+    positionDropdownPanel(els.favoritesPanel, els.btnFavorites);
+  }
+
+  function openBlockedPanel() {
+    // re-query in case DOM moved
+    els.blockedPanel = $("blockedPanel") || els.blockedPanel;
+    els.blockedList = $("blockedList") || els.blockedList;
+    els.blockedEmpty = $("blockedEmpty") || els.blockedEmpty;
+    els.btnClearBlocked = $("btnClearBlocked") || els.btnClearBlocked;
+    if (!els.blockedPanel) return;
+
+    closeFavoritesPanel();
+
+    if (els.blockedPanel.parentElement !== document.body) {
+      document.body.appendChild(els.blockedPanel);
+    }
+
+    blockedPanelOpen = true;
+    els.blockedPanel.hidden = false;
+    els.blockedPanel.removeAttribute("hidden");
+    els.blockedPanel.classList.add("is-open");
+    updateBlockedUi();
+    positionBlockedPanel();
+    blockedIgnoreOutsideUntil = Date.now() + 200;
+  }
+
+  function closeBlockedPanel() {
+    blockedPanelOpen = false;
+    if (!els.blockedPanel) return;
+    els.blockedPanel.classList.remove("is-open");
+    els.blockedPanel.hidden = true;
+    els.blockedPanel.setAttribute("hidden", "");
+  }
+
+  function toggleBlockedPanel(ev) {
+    if (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+    }
+    if (isBlockedPanelOpen()) closeBlockedPanel();
+    else openBlockedPanel();
+  }
+
+  function openFavoritesPanel() {
+    els.favoritesPanel = $("favoritesPanel") || els.favoritesPanel;
+    els.favoritesList = $("favoritesList") || els.favoritesList;
+    els.favoritesEmpty = $("favoritesEmpty") || els.favoritesEmpty;
+    els.btnClearFavorites = $("btnClearFavorites") || els.btnClearFavorites;
+    if (!els.favoritesPanel) return;
+
+    closeBlockedPanel();
+
+    if (els.favoritesPanel.parentElement !== document.body) {
+      document.body.appendChild(els.favoritesPanel);
+    }
+
+    favoritesPanelOpen = true;
+    els.favoritesPanel.hidden = false;
+    els.favoritesPanel.removeAttribute("hidden");
+    els.favoritesPanel.classList.add("is-open");
+    updateFavoritesUi();
+    positionFavoritesPanel();
+    favoritesIgnoreOutsideUntil = Date.now() + 200;
+  }
+
+  function closeFavoritesPanel() {
+    favoritesPanelOpen = false;
+    if (!els.favoritesPanel) return;
+    els.favoritesPanel.classList.remove("is-open");
+    els.favoritesPanel.hidden = true;
+    els.favoritesPanel.setAttribute("hidden", "");
+  }
+
+  function toggleFavoritesPanel(ev) {
+    if (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+    }
+    if (isFavoritesPanelOpen()) closeFavoritesPanel();
+    else openFavoritesPanel();
+  }
+
+  // Bind after DOM ready pieces exist
+  (function bindBlockedPanel() {
+    els.btnBlocked = $("btnBlocked") || els.btnBlocked;
+    els.blockedPanel = $("blockedPanel") || els.blockedPanel;
+    if (!els.btnBlocked || !els.blockedPanel) {
+      console.warn("[ui] blocked panel elements missing", {
+        btn: !!els.btnBlocked,
+        panel: !!els.blockedPanel,
+      });
+      return;
+    }
+    if (els.blockedPanel.parentElement !== document.body) {
+      document.body.appendChild(els.blockedPanel);
+    }
+    // start closed
+    closeBlockedPanel();
+
+    els.btnBlocked.addEventListener("click", toggleBlockedPanel);
+
+    if (els.btnClearBlocked) {
+      els.btnClearBlocked.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        clearBlocked();
+      });
+    }
+
+    document.addEventListener("click", (ev) => {
+      if (!isBlockedPanelOpen()) return;
+      if (Date.now() < blockedIgnoreOutsideUntil) return;
+      const t = ev.target;
+      if (t && typeof t.closest === "function") {
+        if (t.closest("#btnBlocked") || t.closest("#blockedPanel")) return;
+      }
+      closeBlockedPanel();
+    });
+
+    window.addEventListener("resize", positionBlockedPanel);
+    window.addEventListener("scroll", positionBlockedPanel, true);
+  })();
+
+  (function bindFavoritesPanel() {
+    els.btnFavorites = $("btnFavorites") || els.btnFavorites;
+    els.favoritesPanel = $("favoritesPanel") || els.favoritesPanel;
+    if (!els.btnFavorites || !els.favoritesPanel) {
+      console.warn("[ui] favorites panel elements missing", {
+        btn: !!els.btnFavorites,
+        panel: !!els.favoritesPanel,
+      });
+      return;
+    }
+    if (els.favoritesPanel.parentElement !== document.body) {
+      document.body.appendChild(els.favoritesPanel);
+    }
+    closeFavoritesPanel();
+
+    els.btnFavorites.addEventListener("click", toggleFavoritesPanel);
+
+    if (els.btnClearFavorites) {
+      els.btnClearFavorites.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        clearFavorites();
+      });
+    }
+
+    document.addEventListener("click", (ev) => {
+      if (!isFavoritesPanelOpen()) return;
+      if (Date.now() < favoritesIgnoreOutsideUntil) return;
+      const t = ev.target;
+      if (t && typeof t.closest === "function") {
+        if (t.closest("#btnFavorites") || t.closest("#favoritesPanel")) return;
+      }
+      closeFavoritesPanel();
+    });
+
+    window.addEventListener("resize", positionFavoritesPanel);
+    window.addEventListener("scroll", positionFavoritesPanel, true);
+  })();
+
+  applyThemeUi();
   applyStaticI18n();
   refresh();
   timer = setInterval(refresh, 2500);

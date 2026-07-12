@@ -1,9 +1,10 @@
-# RH NFT Mint Radar
+# ROBIN NFT Radar
 
 Real-time NFT mint leaderboard for **Robinhood Chain** (chainId `4663`).
 
-- Hot list ranked by **1h mint volume** (plus 5m / 30m columns)
-- Live mint feed · OpenSea / Blockscout links · ZH / EN · local block list
+- Hot list ranked by **1h mint volume** (5m / 30m columns)
+- Live mint feed · **Minted Out** panel · price filter · favorites · risk siren
+- OpenSea / Blockscout / Google Lens · ZH / EN · light / dark
 
 ## Local
 
@@ -11,38 +12,51 @@ Real-time NFT mint leaderboard for **Robinhood Chain** (chainId `4663`).
 npm install
 npm start
 # http://localhost:3789
+# or http://localhost:3789/mint.html
 ```
 
-Optional proxy (dev only): see `.env.example`.
+Optional local proxy / keys: copy `.env.example` → `.env` (not used by default; process env only).
 
 ## Deploy on Railway
 
-1. Push this repo to **GitHub** (do not commit `node_modules` or `.env`).
-2. [Railway](https://railway.app) → **New Project** → **Deploy from GitHub**.
-3. Select this repository → Deploy.
-4. Open the generated `*.up.railway.app` URL.
+This repo is already wired for Railway:
 
-Railway will:
+| File | Role |
+|------|------|
+| `railway.toml` | Nixpacks build, `npm start`, healthcheck `/api/health` |
+| `nixpacks.toml` | Node 20 + `npm ci` |
+| `package.json` | `"start": "node server/index.js"` |
+| `server/index.js` | listens on `PORT` + `0.0.0.0` |
 
-- install with `npm ci` (Nixpacks)
-- run `npm start`
-- health-check `GET /api/health`
+### Steps
+
+1. Push this repo to **GitHub** (never commit `node_modules` or `.env`).
+2. [Railway](https://railway.app) → **New Project** → **Deploy from GitHub repo**.
+3. Select the repo → Deploy (default is fine).
+4. **Settings → Networking → Generate Domain** if no public URL yet.
+5. Open `https://*.up.railway.app` (serves `mint.html` at `/`).
 
 ### Variables (optional)
 
 | Name | Required | Notes |
 |------|----------|--------|
-| `PORT` | No | Set by Railway |
+| `PORT` | No | Railway injects automatically |
 | `HOST` | No | Defaults to `0.0.0.0` |
+| `BLOCKSCOUT_BASE` | No | Default public Robinhood Blockscout |
 | `BLOCKSCOUT_API_KEY` | No | If you use Blockscout PRO |
-| `HTTPS_PROXY` | No | **Leave unset** on Railway |
+| `OPENSEA_CHAIN` | No | Default `robinhood` |
+| `HTTPS_PROXY` / `HTTP_PROXY` | No | **Leave unset** on Railway (local Clash only) |
 
-No credit card steps are covered here — use Railway’s free trial / Hobby as you prefer.
+### Ops notes
+
+- **Always-on web service** — mint radar polls Blockscout every few seconds; do not use a “serverless / sleep when idle” plan if you want live data.
+- **No database** — rankings / minted-out live in process memory; restart = cold cache (warms up after first polls).
+- Health: `GET /api/health` must return 200 for Railway to keep the deploy healthy.
 
 ## API
 
 - `GET /api/health` — liveness + poll status  
-- `GET /api/mints?window=60&feed=100&hot=30` — snapshot JSON  
+- `GET /api/mints?window=60&feed=100&hot=30` — full snapshot JSON  
 
 ## Stack
 

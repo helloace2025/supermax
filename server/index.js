@@ -1,6 +1,6 @@
 /**
- * RH NFT Mint Radar — standalone Express entry
- * Only serves mint radar API + static UI (no wallet-intersection panel).
+ * ROBIN NFT Radar — standalone Express entry
+ * Only serves mint radar API + static UI.
  */
 
 import express from "express";
@@ -17,13 +17,23 @@ const HOST = process.env.HOST || "0.0.0.0";
 const app = express();
 app.disable("x-powered-by");
 app.use(express.json({ limit: "256kb" }));
-app.use(express.static(path.join(ROOT, "public"), { maxAge: "1h" }));
+// HTML always revalidated; CSS/JS use query ?v= on links for cache bust while iterating UI
+app.use(
+  express.static(path.join(ROOT, "public"), {
+    maxAge: process.env.NODE_ENV === "production" ? "1h" : 0,
+    setHeaders(res, filePath) {
+      if (filePath.endsWith(".html")) {
+        res.setHeader("Cache-Control", "no-cache");
+      }
+    },
+  })
+);
 
 app.get("/api/health", (_req, res) => {
   const snap = getMintSnapshot({ windowMin: 5, feedLimit: 1, hotLimit: 1 });
   res.json({
     ok: true,
-    product: "nft-mint-radar",
+    product: "robin-nft-radar",
     chain: snap.chain,
     status: snap.status,
   });
@@ -48,7 +58,7 @@ app.get("/", (_req, res) => {
 });
 
 app.listen(PORT, HOST, () => {
-  console.log(`\n  RH NFT Mint Radar`);
+  console.log(`\n  ROBIN NFT Radar`);
   console.log(`  → http://${HOST}:${PORT}`);
   console.log(`  → http://localhost:${PORT}/mint.html`);
   console.log(`  Chain: Robinhood (4663)\n`);

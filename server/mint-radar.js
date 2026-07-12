@@ -1,5 +1,5 @@
 /**
- * Robinhood Chain NFT Mint Radar
+ * ROBIN NFT Radar (Robinhood Chain)
  * Polls Blockscout advanced-filters, keeps sliding-window aggregates.
  */
 
@@ -48,13 +48,37 @@ const JUNK_RE =
   /gift|claim|airdrop|alert|reward|free\s*nft|scan\s*link|important/i;
 
 const MAX_EVENTS = 4000;
-const POLL_MS = 2000;
+/** Main mint poll interval — leave headroom under Blockscout rate limits */
+const POLL_MS = 3000;
 const FETCH_TIMEOUT_MS = 12000;
+/** Tx price lookups share the same Blockscout quota as poll — keep low. */
+const TX_PRICE_CONCURRENCY = 1;
+const TX_PRICE_GAP_MS = 350;
+const TX_PRICE_CACHE_MAX = 8000;
+const TX_PRICE_ERROR_COOLDOWN_MS = 30_000;
+/** Global pause after HTTP 429 so poll + price workers back off together */
+const RATE_LIMIT_BACKOFF_MS = 8_000;
+let rateLimitUntil = 0;
 
 /** @type {Map<string, object>} eventKey -> mint event */
 const eventMap = new Map();
 /** ordered keys (oldest first) for eviction */
 const eventOrder = [];
+
+/**
+ * Tx value cache: hash -> { valueWei, unitWei, nftMints, status, updatedAt }
+ * unitWei = floor(valueWei / nftMints in that tx) when known
+ * @type {Map<string, object>}
+ */
+const txPriceCache = new Map();
+/** @type {Set<string>} */
+const txPriceQueued = new Set();
+/** @type {string[]} */
+const txPriceQueue = [];
+/** Active parallel price workers */
+let txPriceInFlight = 0;
+let txPriceResolvedOk = 0;
+let txPriceResolvedErr = 0;
 
 /**
  * Collection meta: icon + socials
@@ -81,6 +105,314 @@ const META_GAP_MS = 350;
 function short(addr) {
   if (!addr || addr.length < 10) return addr || "—";
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
+}
+
+/** @returns {bigint|null} */
+function toWei(v) {
+  if (v == null || v === "") return null;
+  try {
+    return BigInt(String(v));
+  } catch {
+    return null;
+  }
+}
+
+/** Compact ETH string from wei (no float noise). */
+function weiToEthString(wei) {
+  if (wei == null) return null;
+  const w = typeof wei === "bigint" ? wei : toWei(wei);
+  if (w == null) return null;
+  if (w === 0n) return "0";
+  const neg = w < 0n;
+  const abs = neg ? -w : w;
+  const whole = abs / 10n ** 18n;
+  let frac = (abs % 10n ** 18n).toString().padStart(18, "0").replace(/0+$/, "");
+  if (frac.length > 6) frac = frac.slice(0, 6).replace(/0+$/, "");
+  const s = frac ? `${whole}.${frac}` : `${whole}`;
+  return neg ? `-${s}` : s;
+}
+
+/** Single reference price only (no ranges). 0 → Free. */
+function formatPriceLabel(wei) {
+  if (wei == null) return null;
+  const w = typeof wei === "bigint" ? wei : toWei(wei);
+  if (w == null) return null;
+  if (w === 0n) return "Free";
+  return `${weiToEthString(w)} ETH`;
+}
+
+/** How many ERC-721 mint events we already stored for this tx hash. */
+function countNftMintsInStore(hash) {
+  const h = String(hash || "").toLowerCase();
+  let n = 0;
+  for (const e of allEvents()) {
+    if (String(e.txHash || "").toLowerCase() === h) n += 1;
+  }
+  return n;
+}
+
+/** Count ERC-721 mints (from 0x0) in a token-transfer list. */
+function countErc721MintsFromTransfers(transfers) {
+  let n = 0;
+  if (!Array.isArray(transfers)) return 0;
+  for (const t of transfers) {
+    const is721 =
+      t.token_type === "ERC-721" ||
+      t.token?.type === "ERC-721" ||
+      t.token?.token_type === "ERC-721";
+    if (!is721) continue;
+    const from = String(t.from?.hash || "").toLowerCase();
+    const mintType = t.type === "token_minting" || from === ZERO;
+    if (mintType) n += 1;
+  }
+  return n;
+}
+
+/**
+ * Best-effort mint quantity from decoded calldata
+ * e.g. mint(uint256) / mintPublic(..., quantity, ...)
+ */
+function quantityFromDecodedInput(decoded) {
+  if (!decoded || !Array.isArray(decoded.parameters)) return 0;
+  const params = decoded.parameters;
+  const method = String(decoded.method_call || decoded.method_id || "").toLowerCase();
+
+  // mint(uint256 amount) / mintTo(..., amount)
+  for (const p of params) {
+    const name = String(p.name || "").toLowerCase();
+    if (
+      name === "quantity" ||
+      name === "amount" ||
+      name === "num" ||
+      name === "count" ||
+      name === "n" ||
+      name === "arg0"
+    ) {
+      const v = Number(p.value);
+      if (Number.isFinite(v) && v >= 1 && v <= 10000) return Math.floor(v);
+    }
+  }
+
+  // mintPublic(nft, feeRecipient, minterIfNotPayer, quantity, ...)
+  if (method.includes("mintpublic") || method.includes("mintsigned")) {
+    for (const p of params) {
+      if (String(p.type || "").includes("uint") && p.name) {
+        const name = String(p.name).toLowerCase();
+        if (name.includes("quant") || name.includes("amount")) {
+          const v = Number(p.value);
+          if (Number.isFinite(v) && v >= 1 && v <= 10000) return Math.floor(v);
+        }
+      }
+    }
+    // SeaDrop mintPublic: quantity is often the 4th param (index 3)
+    if (params.length >= 4) {
+      const v = Number(params[3]?.value);
+      if (Number.isFinite(v) && v >= 1 && v <= 10000) return Math.floor(v);
+    }
+  }
+
+  return 0;
+}
+
+/**
+ * Unit price = tx.value / NFT count in that tx (never show total as unit).
+ * n = max(store events, explorer transfers, decoded quantity, 1)
+ */
+function resolveMintQty(meta, hash) {
+  const stored = countNftMintsInStore(hash);
+  const fromMeta = Number(meta?.nftMints) || 0;
+  const fromDecoded = Number(meta?.decodedQty) || 0;
+  const n = Math.max(stored, fromMeta, fromDecoded, 1);
+  return n;
+}
+
+function applyTxPriceToEvents(hash) {
+  const h = String(hash || "").toLowerCase();
+  const meta = txPriceCache.get(h);
+  if (!meta || meta.valueWei == null) return false;
+  const valueWei = toWei(meta.valueWei);
+  if (valueWei == null) return false;
+
+  // Always re-count from store so late-arriving mints recalculate unit price
+  const n = resolveMintQty(meta, h);
+  meta.nftMints = n;
+  // integer division: 3e14 wei / 3 = 1e14 wei (0.0001 ETH if total was 0.0003)
+  const unitWei = valueWei / BigInt(n);
+  meta.unitWei = unitWei.toString();
+  meta.unitEth = weiToEthString(unitWei);
+  meta.txValueEth = weiToEthString(valueWei);
+  meta.updatedAt = Date.now();
+
+  let hit = 0;
+  for (const e of allEvents()) {
+    if (String(e.txHash || "").toLowerCase() !== h) continue;
+    e.txValueWei = valueWei.toString();
+    e.txValueEth = meta.txValueEth;
+    e.mintQtyInTx = n;
+    e.unitPriceWei = unitWei.toString();
+    e.unitPriceEth = meta.unitEth;
+    e.priceKnown = true;
+    hit += 1;
+  }
+  return hit > 0;
+}
+
+/**
+ * Stamp unit price onto one event from cache (used when aggregating).
+ * Recomputes unit once per tx hash so batch qty corrections (n: 1→5) overwrite bad unit.
+ * @param {Set<string>} [recomputed] — hashes already applyTxPriceToEvents'd this pass
+ */
+function hydrateEventPrice(e, recomputed = null) {
+  if (!e) return;
+  const h = String(e.txHash || "").toLowerCase();
+  if (!h) return;
+  const meta = txPriceCache.get(h);
+  if (meta?.valueWei != null) {
+    if (!recomputed || !recomputed.has(h)) {
+      // Recompute unit from latest store count (batch mints arrive across polls)
+      applyTxPriceToEvents(h);
+      if (recomputed) recomputed.add(h);
+    } else if (meta.unitWei != null) {
+      e.txValueWei = String(meta.valueWei);
+      e.txValueEth = meta.txValueEth ?? weiToEthString(meta.valueWei);
+      e.mintQtyInTx = meta.nftMints || 1;
+      e.unitPriceWei = String(meta.unitWei);
+      e.unitPriceEth = meta.unitEth ?? weiToEthString(meta.unitWei);
+      e.priceKnown = true;
+    }
+    return;
+  }
+  if (meta?.unitWei != null) {
+    e.unitPriceWei = String(meta.unitWei);
+    e.unitPriceEth = meta.unitEth ?? weiToEthString(meta.unitWei);
+    e.priceKnown = true;
+  }
+}
+
+function queueTxPrice(hash, hintValueWei = null) {
+  const h = String(hash || "").toLowerCase();
+  if (!h || h.length < 10) return;
+  if (hintValueWei != null) {
+    const existing = txPriceCache.get(h) || {};
+    existing.valueWei = String(toWei(hintValueWei) ?? hintValueWei);
+    if (!existing.status || existing.status === "hint") existing.status = "hint";
+    txPriceCache.set(h, existing);
+    // Free mint (0) or known value — apply immediately as unit estimate
+    applyTxPriceToEvents(h);
+  }
+  const cached = txPriceCache.get(h);
+  // Re-apply when store count grew (batch mint discovered later)
+  if (cached?.status === "ok" && cached.valueWei != null) {
+    applyTxPriceToEvents(h);
+    return;
+  }
+  // Avoid hammering Blockscout after a hard failure
+  if (cached?.status === "error") {
+    const age = Date.now() - (cached.updatedAt || 0);
+    if (age < TX_PRICE_ERROR_COOLDOWN_MS) return;
+  }
+  if (txPriceQueued.has(h)) return;
+  txPriceQueued.add(h);
+  // Newest first so the live board gets prices sooner under load
+  txPriceQueue.unshift(h);
+  while (txPriceCache.size > TX_PRICE_CACHE_MAX) {
+    const first = txPriceCache.keys().next().value;
+    if (!first) break;
+    txPriceCache.delete(first);
+  }
+  kickTxPriceWorker();
+}
+
+async function resolveTxPrice(hash) {
+  const h = String(hash || "").toLowerCase();
+  try {
+    // One call is enough: tx payload includes value + token_transfers + decoded_input
+    const tx = await fetchJson(`${BLOCKSCOUT}/api/v2/transactions/${h}`);
+    const valueWei = toWei(tx?.value ?? 0) ?? 0n;
+
+    let nftMints = countErc721MintsFromTransfers(tx?.token_transfers);
+    const decodedQty = quantityFromDecodedInput(tx?.decoded_input);
+    let stored = countNftMintsInStore(h);
+
+    // Prefer decoded quantity early (SeaDrop mintPublic quantity) — don't wait for all rows
+    // Extra transfers endpoint only when still ambiguous (batch not in payload)
+    if (Math.max(nftMints, decodedQty, stored) < 2) {
+      try {
+        const tr = await fetchJson(
+          `${BLOCKSCOUT}/api/v2/transactions/${h}/token-transfers`
+        );
+        const items = Array.isArray(tr?.items) ? tr.items : [];
+        nftMints = Math.max(nftMints, countErc721MintsFromTransfers(items));
+      } catch {
+        /* optional */
+      }
+      stored = countNftMintsInStore(h);
+    }
+
+    // True NFT count for unit price: max of transfer rows, decoded qty, store rows
+    // (must divide total tx.value by this — never show total as unit when n>1)
+    const qty = Math.max(nftMints, decodedQty, stored, 1);
+
+    txPriceCache.set(h, {
+      valueWei: valueWei.toString(),
+      nftMints: qty,
+      decodedQty,
+      transferMints: nftMints,
+      storedMints: stored,
+      status: "ok",
+      updatedAt: Date.now(),
+    });
+    applyTxPriceToEvents(h);
+    txPriceResolvedOk += 1;
+  } catch (e) {
+    const prev = txPriceCache.get(h) || {};
+    txPriceCache.set(h, {
+      ...prev,
+      status: "error",
+      updatedAt: Date.now(),
+      error: e.message || String(e),
+    });
+    txPriceResolvedErr += 1;
+    if (txPriceResolvedErr <= 5 || txPriceResolvedErr % 50 === 0) {
+      console.warn(
+        `[mint-radar] tx-price fail #${txPriceResolvedErr} ${short(h)}:`,
+        e.message || e
+      );
+    }
+  }
+}
+
+function kickTxPriceWorker() {
+  while (txPriceInFlight < TX_PRICE_CONCURRENCY && txPriceQueue.length) {
+    // Yield entirely while rate-limited so the main poll can recover first
+    if (Date.now() < rateLimitUntil) {
+      const delay = Math.max(200, rateLimitUntil - Date.now());
+      setTimeout(() => kickTxPriceWorker(), delay);
+      return;
+    }
+    const hash = txPriceQueue.shift();
+    if (!hash) break;
+    txPriceQueued.delete(hash);
+    const cached = txPriceCache.get(hash);
+    if (cached?.status === "ok" && cached.valueWei != null) {
+      applyTxPriceToEvents(hash);
+      continue;
+    }
+    if (cached?.status === "error") {
+      const age = Date.now() - (cached.updatedAt || 0);
+      if (age < TX_PRICE_ERROR_COOLDOWN_MS) continue;
+    }
+    txPriceInFlight += 1;
+    (async () => {
+      try {
+        await resolveTxPrice(hash);
+        if (TX_PRICE_GAP_MS > 0) await sleep(TX_PRICE_GAP_MS);
+      } finally {
+        txPriceInFlight -= 1;
+        if (txPriceQueue.length) kickTxPriceWorker();
+      }
+    })();
+  }
 }
 
 function eventKey(item) {
@@ -147,7 +479,93 @@ function emptyMeta(contract) {
     source: null,
     status: "pending",
     updatedAt: 0,
+    /** Collection hard cap from contract maxSupply()/MAX_SUPPLY() — NOT totalSupply/minted */
+    maxSupply: null,
+    /** ok | miss | error | null(not tried) */
+    maxSupplyStatus: null,
+    /** last time we attempted eth_call for maxSupply */
+    maxSupplyCheckedAt: 0,
   };
+}
+
+/**
+ * eth_call → uint256 via Blockscout JSON-RPC.
+ * Note: Robinhood Blockscout does NOT support Etherscan `module=proxy`
+ * (returns "Unknown module"). Use POST /api/eth-rpc instead.
+ * @returns {number|null}
+ */
+async function ethCallUint256(contract, data) {
+  const c = String(contract || "").toLowerCase();
+  if (!c || c.length < 10) return null;
+
+  // Honor global 429 backoff (same as fetchJson)
+  const wait = rateLimitUntil - Date.now();
+  if (wait > 0) await sleep(wait);
+
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await undiciFetch(`${BLOCKSCOUT}/api/eth-rpc`, {
+      method: "POST",
+      signal: ctrl.signal,
+      dispatcher: proxyAgent,
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "robin-nft-radar/1.0",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "eth_call",
+        params: [{ to: c, data }, "latest"],
+      }),
+    });
+    if (!res.ok) {
+      if (res.status === 429) {
+        rateLimitUntil = Date.now() + RATE_LIMIT_BACKOFF_MS;
+      }
+      return null;
+    }
+    const j = await res.json();
+    // Revert / missing method → no maxSupply
+    if (j?.error) return null;
+    const hex = j?.result;
+    if (!hex || typeof hex !== "string" || hex === "0x") return null;
+    if (!/^0x[0-9a-fA-F]+$/.test(hex)) return null;
+    try {
+      const n = BigInt(hex);
+      // Sanity: 0 / absurd caps are not useful maxSupply
+      if (n <= 0n || n > 50_000_000n) return null;
+      if (n > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+      return Number(n);
+    } catch {
+      return null;
+    }
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+/**
+ * Best-effort collection size for mint progress bar.
+ * Tries common ERC-721 mint contract getters.
+ * @returns {number|null}
+ */
+async function fetchMaxSupply(contract) {
+  // maxSupply() → 0xd5abeb01 · MAX_SUPPLY() → 0x32cb6b0c
+  const selectors = ["0xd5abeb01", "0x32cb6b0c"];
+  for (const data of selectors) {
+    try {
+      const n = await ethCallUint256(contract, data);
+      if (n != null) return n;
+    } catch {
+      /* try next selector */
+    }
+  }
+  return null;
 }
 
 function getMeta(contract) {
@@ -159,7 +577,15 @@ function getMeta(contract) {
 
 function needsEnrich(meta) {
   if (!meta || meta.status === "pending") return true;
+  // Never tried maxSupply (or process started before eth-rpc fix)
+  if (meta.maxSupplyStatus == null) return true;
+
   const age = Date.now() - (meta.updatedAt || 0);
+  const supplyAge = Date.now() - (meta.maxSupplyCheckedAt || meta.updatedAt || 0);
+
+  // maxSupply miss must NOT wait for full 30m social meta TTL — retry often
+  if (meta.maxSupplyStatus !== "ok" && supplyAge > 60_000) return true;
+
   if (meta.status === "ok") return age > META_OK_TTL_MS;
   if (meta.status === "miss" || meta.status === "error") return age > META_MISS_TTL_MS;
   return true;
@@ -238,6 +664,33 @@ async function enrichFromBlockscout(contract) {
   return null;
 }
 
+async function enrichMaxSupply(meta, contract) {
+  // Keep a known good maxSupply across meta refreshes
+  if (meta.maxSupplyStatus === "ok" && meta.maxSupply != null) return;
+  meta.maxSupplyCheckedAt = Date.now();
+  try {
+    const ms = await fetchMaxSupply(contract);
+    // IMPORTANT: never fall back to totalSupply/minted as "max" —
+    // that always looks like 100% and confuses progress with inventory.
+    if (ms != null) {
+      meta.maxSupply = ms;
+      meta.maxSupplyStatus = "ok";
+      console.log(`[mint-radar] maxSupply ${short(contract)} = ${ms}`);
+    } else {
+      meta.maxSupply = null;
+      meta.maxSupplyStatus = "miss";
+    }
+  } catch (e) {
+    meta.maxSupplyStatus = "error";
+    if (!String(e.message || "").includes("HTTP 429")) {
+      console.warn(
+        `[mint-radar] maxSupply fail ${short(contract)}:`,
+        e.message || e
+      );
+    }
+  }
+}
+
 async function enrichOne(contract) {
   const meta = getMeta(contract);
   meta.status = "pending";
@@ -267,6 +720,7 @@ async function enrichOne(contract) {
       meta.opensea = got.opensea || meta.opensea;
       meta.source = got.source;
       meta.status = meta.icon || meta.twitter || meta.discord ? "ok" : "miss";
+      await enrichMaxSupply(meta, contract);
       meta.updatedAt = Date.now();
       return meta;
     }
@@ -277,11 +731,13 @@ async function enrichOne(contract) {
       meta.icon = bs?.icon || hintIcon;
       meta.source = bs?.source || "stream";
       meta.status = "ok";
+      await enrichMaxSupply(meta, contract);
       meta.updatedAt = Date.now();
       return meta;
     }
 
     meta.status = "miss";
+    await enrichMaxSupply(meta, contract);
     meta.updatedAt = Date.now();
     return meta;
   } catch (e) {
@@ -317,6 +773,20 @@ function attachMetaFields(row) {
   const m = getMeta(row.contract);
   // keep refreshing hot collections in background
   queueMeta(row.contract, row.icon || m.icon);
+  const maxSupply =
+    m.maxSupply != null
+      ? m.maxSupply
+      : row.maxSupply != null
+        ? row.maxSupply
+        : null;
+  const minted = row.minted ?? row.totalSupply ?? null;
+  const mintedOut =
+    maxSupply != null &&
+    minted != null &&
+    Number.isFinite(Number(maxSupply)) &&
+    Number.isFinite(Number(minted)) &&
+    Number(maxSupply) > 0 &&
+    Number(minted) >= Number(maxSupply);
   return {
     ...row,
     icon: m.icon || row.icon || null,
@@ -328,6 +798,9 @@ function attachMetaFields(row) {
     opensea: m.opensea || row.opensea,
     metaSource: m.source || null,
     metaStatus: m.status || "pending",
+    maxSupply,
+    maxSupplyStatus: m.maxSupplyStatus || null,
+    mintedOut: !!mintedOut,
   };
 }
 
@@ -341,9 +814,16 @@ function normalizeMint(item) {
     if (!m.icon) m.icon = streamIcon;
   }
   queueMeta(contract, streamIcon);
+  const hintValue = toWei(item.value);
+  const txHash = item.hash;
+  const cached = txHash ? txPriceCache.get(String(txHash).toLowerCase()) : null;
+  const unitFromCache = cached?.unitWei != null ? toWei(cached.unitWei) : null;
+  const valueFromCache = cached?.valueWei != null ? toWei(cached.valueWei) : null;
+  const txValueWei = valueFromCache ?? hintValue;
+
   return {
     key: eventKey(item),
-    txHash: item.hash,
+    txHash,
     blockNumber: item.block_number ?? null,
     timestamp: item.timestamp,
     ts,
@@ -353,11 +833,21 @@ function normalizeMint(item) {
     name: item.token?.name || "Unknown",
     symbol: item.token?.symbol || "?",
     holders: item.token?.holders_count != null ? Number(item.token.holders_count) : null,
+    // Blockscout token.total_supply for ERC-721 ≈ already minted count (not maxSupply)
+    minted:
+      item.token?.total_supply != null ? Number(item.token.total_supply) : null,
+    /** @deprecated use minted — kept for older clients */
     totalSupply:
       item.token?.total_supply != null ? Number(item.token.total_supply) : null,
     minter,
     minterShort: short(minter),
     icon: streamIcon || getMeta(contract).icon || null,
+    // price: tx native value / # of NFT mints in that tx (unit price)
+    txValueWei: txValueWei != null ? txValueWei.toString() : null,
+    txValueEth: txValueWei != null ? weiToEthString(txValueWei) : null,
+    unitPriceWei: unitFromCache != null ? unitFromCache.toString() : null,
+    unitPriceEth: unitFromCache != null ? weiToEthString(unitFromCache) : null,
+    priceKnown: unitFromCache != null,
     explorerTx: `${EXPLORER}/tx/${item.hash}`,
     explorerToken: `${EXPLORER}/token/${contract}`,
     explorerMinter: `${EXPLORER}/address/${minter}`,
@@ -387,6 +877,8 @@ function trimEvents() {
 
 function ingestItems(items) {
   let added = 0;
+  /** @type {Set<string>} */
+  const touchedTx = new Set();
   for (const raw of items) {
     if (!isMintItem(raw)) continue;
     const m = normalizeMint(raw);
@@ -394,11 +886,16 @@ function ingestItems(items) {
     eventMap.set(m.key, m);
     eventOrder.push(m.key);
     added += 1;
+    if (m.txHash) touchedTx.add(String(m.txHash).toLowerCase());
     if (m.blockNumber != null) {
       latestBlock =
         latestBlock == null ? m.blockNumber : Math.max(latestBlock, m.blockNumber);
     }
+    // Prefer tx-level value (filter often has value=null)
+    queueTxPrice(m.txHash, raw.value != null ? raw.value : null);
   }
+  // Re-apply unit price after batch counts are known
+  for (const h of touchedTx) applyTxPriceToEvents(h);
   trimEvents();
   return added;
 }
@@ -410,6 +907,10 @@ function withApiKey(url) {
 }
 
 async function fetchJson(url) {
+  // Honor global 429 backoff before hitting Blockscout again
+  const wait = rateLimitUntil - Date.now();
+  if (wait > 0) await sleep(wait);
+
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
   try {
@@ -418,11 +919,17 @@ async function fetchJson(url) {
       dispatcher: proxyAgent,
       headers: {
         Accept: "application/json",
-        "User-Agent": "rh-nft-mint-radar/1.0",
+        "User-Agent": "robin-nft-radar/1.0",
       },
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
+      if (res.status === 429) {
+        rateLimitUntil = Date.now() + RATE_LIMIT_BACKOFF_MS;
+        console.warn(
+          `[mint-radar] Blockscout 429 — pause ${RATE_LIMIT_BACKOFF_MS}ms`
+        );
+      }
       throw new Error(`HTTP ${res.status}: ${text.slice(0, 120)}`);
     }
     return await res.json();
@@ -435,33 +942,45 @@ async function pollOnce() {
   if (polling) return;
   polling = true;
   try {
-    // Page 1 is newest; grab a few pages for denser coverage
-    let url = `${BLOCKSCOUT}/api/v2/advanced-filters?transaction_types=ERC-721`;
-    let totalAdded = 0;
-    for (let page = 0; page < 3; page += 1) {
-      const data = await fetchJson(url);
-      const items = Array.isArray(data?.items) ? data.items : [];
-      totalAdded += ingestItems(items);
-      const np = data?.next_page_params;
-      if (!np || !items.length) break;
-      // only dig deeper on first few polls or when we got few mints
-      if (page > 0 && totalAdded > 15) break;
-      const qs = new URLSearchParams();
-      for (const [k, v] of Object.entries(np)) {
-        if (v != null) qs.set(k, String(v));
+    let lastErr = null;
+    // One retry — transient proxy / Blockscout blips are common
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        // Page 1 is newest; grab a few pages for denser coverage
+        let url = `${BLOCKSCOUT}/api/v2/advanced-filters?transaction_types=ERC-721`;
+        let totalAdded = 0;
+        for (let page = 0; page < 3; page += 1) {
+          const data = await fetchJson(url);
+          const items = Array.isArray(data?.items) ? data.items : [];
+          totalAdded += ingestItems(items);
+          const np = data?.next_page_params;
+          if (!np || !items.length) break;
+          // only dig deeper on first few polls or when we got few mints
+          if (page > 0 && totalAdded > 15) break;
+          const qs = new URLSearchParams();
+          for (const [k, v] of Object.entries(np)) {
+            if (v != null) qs.set(k, String(v));
+          }
+          qs.set("transaction_types", "ERC-721");
+          url = `${BLOCKSCOUT}/api/v2/advanced-filters?${qs.toString()}`;
+        }
+        lastPollAt = new Date().toISOString();
+        lastError = null;
+        pollCount += 1;
+        if (totalAdded > 0) {
+          console.log(`[mint-radar] +${totalAdded} mints (store=${eventMap.size})`);
+        }
+        lastErr = null;
+        break;
+      } catch (e) {
+        lastErr = e;
+        if (attempt === 0) await sleep(400);
       }
-      qs.set("transaction_types", "ERC-721");
-      url = `${BLOCKSCOUT}/api/v2/advanced-filters?${qs.toString()}`;
     }
-    lastPollAt = new Date().toISOString();
-    lastError = null;
-    pollCount += 1;
-    if (totalAdded > 0) {
-      console.log(`[mint-radar] +${totalAdded} mints (store=${eventMap.size})`);
+    if (lastErr) {
+      lastError = lastErr.message || String(lastErr);
+      console.error("[mint-radar] poll failed:", lastError);
     }
-  } catch (e) {
-    lastError = e.message || String(e);
-    console.error("[mint-radar] poll failed:", lastError);
   } finally {
     polling = false;
   }
@@ -497,8 +1016,12 @@ function aggregate(windowMs) {
   /** @type {Map<string, any>} */
   const by = new Map();
 
+  /** @type {Set<string>} */
+  const priceRecomputed = new Set();
   for (const e of allEvents()) {
     if (e.ts < from) continue;
+    // Ensure unit price is stamped before aggregation (cache may have resolved later)
+    hydrateEventPrice(e, priceRecomputed);
     let row = by.get(e.contract);
     if (!row) {
       row = {
@@ -506,10 +1029,20 @@ function aggregate(windowMs) {
         name: e.name,
         symbol: e.symbol,
         holders: e.holders,
-        totalSupply: e.totalSupply,
+        minted: e.minted ?? e.totalSupply,
+        totalSupply: e.minted ?? e.totalSupply,
         mints: 0,
         minters: new Set(),
         methods: new Map(),
+        /**
+         * Reference unit price = unit from the most recent mint with a known price.
+         * (unit = tx.value / # NFTs in that tx — e.g. 0.000025/5 → 0.000005)
+         * Prefer "current" over sticky first — first was often wrong when batch qty
+         * arrived late, and free→paid projects need the paid unit.
+         */
+        priceRefWei: null,
+        priceRefTs: null,
+        priceUnknown: 0,
         lastMintAt: e.timestamp,
         lastTs: e.ts,
         lastTx: e.txHash,
@@ -525,6 +1058,16 @@ function aggregate(windowMs) {
     if (e.method) {
       row.methods.set(e.method, (row.methods.get(e.method) || 0) + 1);
     }
+
+    const unit = toWei(e.unitPriceWei);
+    if (unit == null) {
+      row.priceUnknown += 1;
+    } else if (row.priceRefTs == null || e.ts >= row.priceRefTs) {
+      // Latest known unit (recomputed after batch qty fix)
+      row.priceRefWei = unit;
+      row.priceRefTs = e.ts;
+    }
+
     // refresh metadata from newest
     if (e.ts >= row.lastTs) {
       row.lastTs = e.ts;
@@ -534,7 +1077,11 @@ function aggregate(windowMs) {
       row.name = e.name || row.name;
       row.symbol = e.symbol || row.symbol;
       if (e.holders != null) row.holders = e.holders;
-      if (e.totalSupply != null) row.totalSupply = e.totalSupply;
+      const m = e.minted ?? e.totalSupply;
+      if (m != null) {
+        row.minted = m;
+        row.totalSupply = m;
+      }
     }
     if (e.ts < row.firstTs) row.firstTs = e.ts;
   }
@@ -548,19 +1095,37 @@ function aggregate(windowMs) {
     const mints1h = counts1h.get(r.contract) || 0;
     // Rank by 1h mint volume only (higher total = hotter)
     const score = mints1h;
+    const priceWei =
+      r.priceRefWei != null ? r.priceRefWei.toString() : null;
+    const priceEth = weiToEthString(r.priceRefWei);
+    const priceDisplay = formatPriceLabel(r.priceRefWei);
 
     return attachMetaFields({
       contract: r.contract,
       name: r.name,
       symbol: r.symbol,
       holders: r.holders,
-      totalSupply: r.totalSupply,
+      minted: r.minted ?? r.totalSupply,
+      totalSupply: r.minted ?? r.totalSupply,
       mints: r.mints,
       uniqueMinters,
       topMethod,
       mints5m,
       mints30m,
       mints1h,
+      // single reference = latest known unit price (tx.value / mint count)
+      priceWei,
+      priceEth,
+      priceDisplay,
+      // legacy aliases (same single value; no ranges)
+      priceMinWei: priceWei,
+      priceMaxWei: priceWei,
+      priceLastWei: priceWei,
+      priceMinEth: priceEth,
+      priceMaxEth: priceEth,
+      priceLastEth: priceEth,
+      priceMixed: false,
+      priceUnknown: r.priceUnknown,
       lastMintAt: r.lastMintAt,
       lastTs: r.lastTs,
       lastTx: r.lastTx,
@@ -586,21 +1151,39 @@ function aggregate(windowMs) {
   return list;
 }
 
+/** Recently sold-out collections (maxSupply known & minted >= max). */
+function collectMintedOut(limit = 20) {
+  // Cover entire in-memory store (not just 1h heat window)
+  const windowMs = 30 * 24 * 60 * 60 * 1000;
+  const n = Math.max(5, Math.min(40, Number(limit) || 20));
+  return aggregate(windowMs)
+    .filter((r) => r && r.mintedOut)
+    .sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0))
+    .slice(0, n);
+}
+
 export function getMintSnapshot(opts = {}) {
   const windowMin = Math.max(1, Math.min(60, Number(opts.windowMin) || 60));
   const feedLimit = Math.max(10, Math.min(200, Number(opts.feedLimit) || 80));
   const hotLimit = Math.max(5, Math.min(50, Number(opts.hotLimit) || 25));
+  const outLimit = Math.max(5, Math.min(40, Number(opts.outLimit) || 20));
 
   const windowMs = windowMin * 60 * 1000;
   const hot = aggregate(windowMs).slice(0, hotLimit);
   const hot1 = aggregate(60 * 1000).slice(0, 10);
   const hot15 = aggregate(15 * 60 * 1000).slice(0, 10);
+  const mintedOut = collectMintedOut(outLimit);
 
+  /** @type {Set<string>} */
+  const feedPriceDone = new Set();
   const events = allEvents()
     .slice()
     .reverse()
     .slice(0, feedLimit)
-    .map((e) => attachMetaFields(e));
+    .map((e) => {
+      hydrateEventPrice(e, feedPriceDone);
+      return attachMetaFields(e);
+    });
 
   const now = Date.now();
   const mints1m = allEvents().filter((e) => e.ts >= now - 60_000).length;
@@ -613,6 +1196,10 @@ export function getMintSnapshot(opts = {}) {
   ).size;
 
   const metaOk = [...metaCache.values()].filter((m) => m.status === "ok").length;
+  let priceKnownEvents = 0;
+  for (const e of allEvents()) {
+    if (e.unitPriceWei != null) priceKnownEvents += 1;
+  }
 
   return {
     ok: true,
@@ -631,6 +1218,12 @@ export function getMintSnapshot(opts = {}) {
       metaCached: metaCache.size,
       metaOk,
       metaQueue: metaQueue.length,
+      priceQueue: txPriceQueue.length,
+      priceInFlight: txPriceInFlight,
+      priceCache: txPriceCache.size,
+      priceOk: txPriceResolvedOk,
+      priceErr: txPriceResolvedErr,
+      priceKnownEvents,
     },
     stats: {
       mints1m,
@@ -643,6 +1236,8 @@ export function getMintSnapshot(opts = {}) {
     hot1m: hot1,
     hot15m: hot15,
     feed: events,
+    /** Sold-out collections still in radar memory (recent last mint first) */
+    mintedOut,
     blacklist: [...BLACKLIST],
   };
 }
