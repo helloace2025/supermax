@@ -253,19 +253,41 @@ h1 {
   color: var(--accent);
 }
 
-/* Same look as .top-link, but a button (Updates) */
-button.top-link-btn {
+/*
+ * Updates control is a <button> — must restate every .top-link token.
+ * (font: inherit picks up body Syne and looks unlike the Twitter <a>)
+ */
+button.top-link.top-link-btn {
+  appearance: none;
+  -webkit-appearance: none;
   border: 0;
   background: transparent;
   padding: 0;
   margin: 0;
   cursor: pointer;
-  font: inherit;
-  color: inherit;
+  display: inline;
+  vertical-align: baseline;
+  box-sizing: border-box;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  text-decoration: none !important;
+  white-space: nowrap;
+  transition: color 0.15s;
 }
 
-button.top-link-btn:hover {
+button.top-link.top-link-btn:hover {
   color: var(--accent);
+}
+
+/* Keep Twitter · 更新 on one optical baseline */
+.top-links .top-link,
+.top-links .top-link-sep,
+.top-links button.top-link {
+  line-height: 1;
 }
 
 .top-link-sep {

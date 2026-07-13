@@ -14,39 +14,29 @@
   const SEARCH_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>`;
 
   /**
-   * Lightweight product updates — newest first.
-   * When shipping a user-visible fix, prepend one short line (zh + en). No backend.
+   * Product updates — newest first. Short, user-facing only (no eng jargon fluff).
+   * Before any GitHub push: review new lines with the user first.
    */
   const UPDATES = [
     {
       date: "2026-07-13",
-      zh: "顶栏增加「更新」：展示最近改动（替换空 Telegram）",
-      en: "Header Updates panel for recent changes (replaces empty Telegram)",
+      zh: "过滤投票锁仓类 NFT（veNFT 等），不再进入热榜",
+      en: "Hide vote-escrow NFTs (veNFT, etc.) from the hot list",
     },
     {
       date: "2026-07-13",
-      zh: "过滤 veNFT / 投票锁仓类噪声，不再进热榜",
-      en: "Filter out veNFT / vote-escrow lock noise from the leaderboard",
+      zh: "修正部分项目「已铸造」数量异常偏大的问题",
+      en: "Fix incorrect oversized Minted counts on some collections",
     },
     {
       date: "2026-07-13",
-      zh: "修正「已铸造」异常大数（误读 totalSupply）",
-      en: "Fix absurd Minted counts from bad totalSupply readings",
+      zh: "铸完项目自动离开热榜，并归入已铸完",
+      en: "Sold-out collections leave the hot list and move to Minted Out",
     },
     {
       date: "2026-07-13",
-      zh: "铸完项目离开热榜；已铸完列表不再每几秒重绘",
-      en: "Sold-out leaves hot list; minted-out panel no longer re-renders every few seconds",
-    },
-    {
-      date: "2026-07-13",
-      zh: "免费 mint 统一显示「免费」，不再出现 0 ETH",
-      en: "Free mints always show Free instead of 0 ETH",
-    },
-    {
-      date: "2026-07-13",
-      zh: "铸造热榜列宽均分，消除中间大空档",
-      en: "Even hot-table columns across the panel width",
+      zh: "免费铸造统一显示为「免费」",
+      en: "Free mints always display as Free",
     },
   ];
 
@@ -86,7 +76,7 @@
       feedEmpty: "暂无铸造事件",
       outTitle: "🏁 已铸完",
       outHint: "MINT OUT · 仍可跟进",
-      outEmpty: "暂无已铸完项目（需读到 maxSupply 且已铸满；进入后会保留历史）",
+      outEmpty: "暂无已铸完项目",
       statusWaiting: "等待数据…",
       footerNote: "数据源：Blockscout REST · 无需自建节点（后续可升级 RPC eth_getLogs）",
       justNow: "刚刚",
@@ -155,7 +145,7 @@
       feedEmpty: "No mint events yet",
       outTitle: "🏁 Minted Out",
       outHint: "MINT OUT · still trackable",
-      outEmpty: "No sold-out collections yet (needs maxSupply + full mint; history is kept once listed)",
+      outEmpty: "No sold-out collections yet",
       statusWaiting: "Waiting for data…",
       footerNote:
         "Source: Blockscout REST · No self-hosted node (RPC eth_getLogs later)",

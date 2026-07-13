@@ -2,9 +2,8 @@
  * ROBIN NFT Radar (Robinhood Chain)
  * Polls Blockscout advanced-filters, keeps sliding-window aggregates.
  *
- * HTTP: Node 20+ built-in fetch only (undici@8 crashes on Node 20.19 —
- * `webidl.util.markAsUncloneable is not a function`).
- * For local Clash, use TUN/system proxy — do not rely on HTTPS_PROXY+undici.
+ * HTTP: prefer undici ProxyAgent when HTTPS_PROXY/HTTP_PROXY is set (local Clash
+ * without TUN). Falls back to global fetch on Railway/public networks.
  *
  * Minted-out archive: once a collection is detected as sold out it is kept in
  * memory + JSON file (DATA_DIR) so it does not disappear when mint events age out.
@@ -13,6 +12,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { ProxyAgent, fetch as undiciFetch } from "undici";
 
 /** API base (public explorer or PRO gateway e.g. https://api.blockscout.com/4663) */
 const BLOCKSCOUT_API = (
@@ -36,16 +36,37 @@ if (typeof globalThis.fetch !== "function") {
 if (BLOCKSCOUT_API_KEY) {
   console.log(`[mint-radar] Blockscout API key enabled`);
 }
-const _proxyHint =
+
+/** Local Clash etc. — Node global fetch ignores proxy env; undici does not. */
+const PROXY_URL = (
   process.env.HTTPS_PROXY ||
   process.env.HTTP_PROXY ||
   process.env.https_proxy ||
   process.env.http_proxy ||
-  "";
-if (_proxyHint && /127\.0\.0\.1|localhost/i.test(_proxyHint)) {
-  console.log(
-    `[mint-radar] note: HTTPS_PROXY=${_proxyHint} is ignored (using Node fetch; use Clash TUN for local proxy)`
-  );
+  ""
+).trim();
+
+/** @type {import("undici").ProxyAgent | null} */
+let proxyAgent = null;
+if (PROXY_URL) {
+  try {
+    proxyAgent = new ProxyAgent(PROXY_URL);
+    console.log(`[mint-radar] outbound HTTP via proxy ${PROXY_URL}`);
+  } catch (e) {
+    console.warn(
+      `[mint-radar] proxy init failed (${PROXY_URL}):`,
+      e?.message || e
+    );
+    proxyAgent = null;
+  }
+}
+
+/** Fetch Blockscout (and eth-rpc) with optional proxy */
+function bsFetch(url, init = {}) {
+  if (proxyAgent) {
+    return undiciFetch(url, { ...init, dispatcher: proxyAgent });
+  }
+  return globalThis.fetch(url, init);
 }
 
 /** LP / non-collection NFT contracts to ignore */
@@ -577,7 +598,7 @@ async function ethCallUint256(contract, data) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
   try {
-    const res = await fetch(`${BLOCKSCOUT}/api/eth-rpc`, {
+    const res = await bsFetch(`${BLOCKSCOUT}/api/eth-rpc`, {
       method: "POST",
       signal: ctrl.signal,
       headers: {
@@ -1030,7 +1051,7 @@ async function fetchJson(url) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
   try {
-    const res = await fetch(withApiKey(url), {
+    const res = await bsFetch(withApiKey(url), {
       signal: ctrl.signal,
       headers: {
         Accept: "application/json",
