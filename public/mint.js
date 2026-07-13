@@ -896,7 +896,7 @@
 
   function localMintedOutList() {
     return [...localMintedOut.values()]
-      .filter((r) => !isBlocked(r.contract) && !isLpNft(r))
+      .filter((r) => !isBlocked(r.contract) && !isNoiseNft(r))
       .sort((a, b) => (Number(b.lastTs) || 0) - (Number(a.lastTs) || 0));
   }
 
@@ -910,6 +910,30 @@
       /UNI-V[34]|Positions NFT/i.test(row?.name || "") ||
       /UNI-V[34]/i.test(row?.symbol || "")
     );
+  }
+
+  /**
+   * Vote-escrow / governance lock NFTs — not collectible mints (match server filter).
+   * Chain has no standard flag; name/symbol heuristics only on the client.
+   */
+  function isVeOrGovNft(row) {
+    const name = String(row?.name || "");
+    const symbol = String(row?.symbol || "").trim();
+    if (
+      /\bve[\s_-]?nft\b|\bvoting[\s_-]?escrow\b|\bvote[\s_-]?escrow\b|\bvote[\s_-]?lock\b|\bescrow[\s_-]?nft\b|\blocked[\s_-]?nft\b|\bgovernance[\s_-]?(lock|nft|position)\b/i.test(
+        name
+      ) ||
+      /\bve[\s_-]?nft\b|\bvoting[\s_-]?escrow\b/i.test(symbol)
+    ) {
+      return true;
+    }
+    if (/^ve[A-Za-z0-9]{1,16}$/i.test(symbol)) return true;
+    return false;
+  }
+
+  /** Noise rows to hide everywhere (LP + ve/gov locks). */
+  function isNoiseNft(row) {
+    return isLpNft(row) || isVeOrGovNft(row);
   }
 
   function loadPriceFilter() {
@@ -1068,7 +1092,7 @@
   function filterHot(list) {
     return list
       .slice()
-      .filter((r) => !isBlocked(r.contract) && !isLpNft(r))
+      .filter((r) => !isBlocked(r.contract) && !isNoiseNft(r))
       .filter((r) => {
         if (priceFilter === "all") return true;
         const cat = priceCategory(r);
@@ -1172,7 +1196,7 @@
 
   function renderFeed(data) {
     let feed = Array.isArray(data.feed) ? data.feed : [];
-    feed = feed.filter((e) => !isBlocked(e.contract) && !isLpNft(e));
+    feed = feed.filter((e) => !isBlocked(e.contract) && !isNoiseNft(e));
 
     if (!feed.length) {
       els.feed.innerHTML = `<div class="empty">${escapeHtml(t("feedEmpty"))}</div>`;

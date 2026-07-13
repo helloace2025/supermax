@@ -60,6 +60,18 @@ const BLACKLIST = new Set(
 const JUNK_RE =
   /gift|claim|airdrop|alert|reward|free\s*nft|scan\s*link|important/i;
 
+/**
+ * Vote-escrow / governance / lock-position "NFTs" — not collectible mints.
+ * There is no ERC standard flag; name/symbol/method heuristics + absurd supply.
+ * Examples: veNFT, VotingEscrow, ve-TOKEN locks (Velodrome-style).
+ */
+const VE_OR_GOV_NFT_RE =
+  /\bve[\s_-]?nft\b|\bvoting[\s_-]?escrow\b|\bvote[\s_-]?escrow\b|\bvote[\s_-]?lock\b|\bescrow[\s_-]?nft\b|\blocked[\s_-]?nft\b|\bgovernance[\s_-]?(lock|nft|position)\b|\bve-token\b|\bvelodrome\b|\baerodrome\b|\bsolidly\b|\bcurve[\s_-]?lock\b/i;
+
+/** Method names typical of ve / lock position mints (not public collection mint) */
+const VE_OR_GOV_METHOD_RE =
+  /create_?lock|increase_?(amount|unlock_?time)|merge(_?nft)?|split(_?nft)?|deposit_?for|withdraw(_?nft)?|checkpoint/i;
+
 const MAX_EVENTS = 4000;
 /** Sticky minted-out history (survives event eviction; file survives restarts if volume set) */
 const __radarDir = path.dirname(fileURLToPath(import.meta.url));
@@ -448,13 +460,49 @@ function eventKey(item) {
   ].join(":");
 }
 
-function isJunkToken(token) {
+/**
+ * Vote-escrow / lock-position NFT (not a normal collectible drop).
+ * Heuristic only — chain has no reliable "isCollectible" bit.
+ */
+function isVeOrGovNft(token, method) {
+  if (!token && !method) return false;
+  const name = String(token?.name || "");
+  const symbol = String(token?.symbol || "").trim();
+  if (VE_OR_GOV_NFT_RE.test(name) || VE_OR_GOV_NFT_RE.test(symbol)) return true;
+  // Symbols like veNFT, veAERO, veSOLID (short ve-prefix governance tokens)
+  if (/^ve[A-Za-z0-9]{1,16}$/i.test(symbol)) return true;
+  if (method && VE_OR_GOV_METHOD_RE.test(String(method))) return true;
+  // total_supply that looks like locked amount / voting power, not # of items
+  const supply = token?.total_supply;
+  if (supply != null && supply !== "") {
+    const n = Number(supply);
+    const holders =
+      token?.holders_count != null ? Number(token.holders_count) : null;
+    // Huge "supply" + tiny holder set → almost certainly not collection size
+    if (
+      Number.isFinite(n) &&
+      n > 100_000 &&
+      Number.isFinite(holders) &&
+      holders > 0 &&
+      holders < 500 &&
+      n / holders > 5_000
+    ) {
+      return true;
+    }
+    // 9+ digit or multi-million "supply" on an ERC-721 mint stream → noise
+    if (Number.isFinite(n) && n > 2_000_000) return true;
+  }
+  return false;
+}
+
+function isJunkToken(token, method) {
   if (!token) return true;
   const addr = String(token.address_hash || "").toLowerCase();
   if (BLACKLIST.has(addr)) return true;
   const name = token.name || "";
   const symbol = token.symbol || "";
   if (JUNK_RE.test(name) || JUNK_RE.test(symbol)) return true;
+  if (isVeOrGovNft(token, method)) return true;
   return false;
 }
 
@@ -462,7 +510,7 @@ function isMintItem(item) {
   if (!item || item.type !== "ERC-721") return false;
   const from = String(item.from?.hash || "").toLowerCase();
   if (from !== ZERO) return false;
-  if (isJunkToken(item.token)) return false;
+  if (isJunkToken(item.token, item.method)) return false;
   return true;
 }
 
