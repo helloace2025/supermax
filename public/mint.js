@@ -20,6 +20,11 @@
   const UPDATES = [
     {
       date: "2026-07-13",
+      zh: "顶栏增加「更新」：展示最近改动（替换空 Telegram）",
+      en: "Header Updates panel for recent changes (replaces empty Telegram)",
+    },
+    {
+      date: "2026-07-13",
       zh: "过滤 veNFT / 投票锁仓类噪声，不再进热榜",
       en: "Filter out veNFT / vote-escrow lock noise from the leaderboard",
     },
