@@ -18,7 +18,7 @@
         }
       })();
     </script>
-    <link rel="stylesheet" href="/mint.css?v=34" />
+    <link rel="stylesheet" href="/mint.css?v=35" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -116,6 +116,18 @@
         </div>
         <div class="table-wrap hide-scrollbar">
           <table>
+            <!-- col widths: only 集合 flexes; metrics shrink-wrap (see mint.css) -->
+            <colgroup>
+              <col class="c-rank" />
+              <col class="c-name" />
+              <col class="c-m5" />
+              <col class="c-m30" />
+              <col class="c-m1h" />
+              <col class="c-price" />
+              <col class="c-holders" />
+              <col class="c-minted" />
+              <col class="c-recent" />
+            </colgroup>
             <thead>
               <tr>
                 <th>#</th>

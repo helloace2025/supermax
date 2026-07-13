@@ -541,18 +541,76 @@ html[data-theme="light"] .wallet-btn.is-connected {
 table {
   width: 100%;
   border-collapse: collapse;
+  table-layout: fixed;
   font-size: 0.86rem;
   font-family: var(--ui);
 }
 
 th,
 td {
-  padding: 11px 12px;
+  padding: 11px 10px;
   text-align: left;
   border-bottom: 1px solid var(--row-border);
   white-space: nowrap;
   vertical-align: middle;
   line-height: 1.35;
+}
+
+/*
+ * Hot leaderboard packing:
+ * - 集合 is the ONLY flexible column (width:100% eats all leftover)
+ * - metric cols use width:0 + nowrap → shrink to content, no dead air
+ * - result: 5m…已铸造…最近 sit as a tight group on the right
+ */
+.hot-panel col.c-rank {
+  width: 2.25rem;
+}
+.hot-panel col.c-name {
+  width: 100%;
+}
+.hot-panel col.c-m5,
+.hot-panel col.c-m30,
+.hot-panel col.c-m1h {
+  width: 0;
+}
+.hot-panel col.c-price {
+  width: 0;
+}
+.hot-panel col.c-holders,
+.hot-panel col.c-minted {
+  width: 0;
+}
+.hot-panel col.c-recent {
+  width: 0;
+}
+
+.hot-panel thead th:nth-child(1),
+.hot-panel tbody td:nth-child(1) {
+  padding-left: 14px;
+  padding-right: 6px;
+  width: 2.25rem;
+}
+
+.hot-panel thead th:nth-child(2),
+.hot-panel tbody td:nth-child(2) {
+  padding-left: 6px;
+  padding-right: 14px;
+  width: 100%;
+  overflow: hidden;
+}
+
+/* Metric cluster: content-sized, right-aligned, tight horizontal rhythm */
+.hot-panel thead th:nth-child(n + 3),
+.hot-panel tbody td:nth-child(n + 3) {
+  width: 0;
+  padding-left: 8px;
+  padding-right: 8px;
+  text-align: right;
+}
+
+.hot-panel thead th:nth-child(9),
+.hot-panel tbody td:nth-child(9) {
+  padding-right: 14px;
 }
 
 th {
@@ -579,8 +637,10 @@ th.th-price {
   position: relative;
   display: inline-flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 4px;
   white-space: nowrap;
+  width: 100%;
 }
 
 /* Excel-style funnel next to “价格” */
@@ -702,7 +762,9 @@ tbody tr:hover {
   display: flex;
   align-items: flex-start; /* tops: image = name */
   gap: 12px;
-  min-width: 200px;
+  /* Under table-layout:fixed, don't force a wide min that starves metric cols */
+  min-width: 0;
+  max-width: 100%;
 }
 
 /*
@@ -762,7 +824,8 @@ tbody tr:hover {
   flex-direction: column;
   gap: var(--name-gap);
   min-width: 0;
-  max-width: 16em; /* ~15 chars + ellipsis; caps column growth */
+  /* Use flexible 集合 column width; ellipsis still via .name */
+  max-width: 100%;
   justify-content: flex-start;
   height: var(--col-text-h);
   overflow: hidden;
@@ -1447,6 +1510,7 @@ html[data-theme="light"] .star-btn.is-on:hover {
   font-size: 0.84rem;
   line-height: 1.35;
   font-weight: 500;
+  text-align: right;
 }
 
 .price-cell {
@@ -1455,7 +1519,8 @@ html[data-theme="light"] .star-btn.is-on:hover {
   font-family: var(--ui);
   font-size: 0.8rem;
   line-height: 1.35;
-  max-width: 140px;
+  text-align: right;
+  max-width: none;
   overflow: hidden;
   text-overflow: ellipsis;
 }
