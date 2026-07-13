@@ -1314,17 +1314,33 @@ function collectMintedOut(limit = 50) {
   return list.slice(0, n);
 }
 
+/** Hot leaderboard must not show sold-out collections (they live in mintedOut). */
+function excludeMintedOutRows(list) {
+  if (!Array.isArray(list) || !list.length) return [];
+  return list.filter((r) => {
+    if (!r) return false;
+    if (r.mintedOut) return false;
+    const c = String(r.contract || "").toLowerCase();
+    if (c && mintedOutArchive.has(c)) return false;
+    return true;
+  });
+}
+
 export function getMintSnapshot(opts = {}) {
   const windowMin = Math.max(1, Math.min(60, Number(opts.windowMin) || 60));
   const feedLimit = Math.max(10, Math.min(200, Number(opts.feedLimit) || 80));
   const hotLimit = Math.max(5, Math.min(50, Number(opts.hotLimit) || 25));
   const outLimit = Math.max(5, Math.min(100, Number(opts.outLimit) || 50));
+  // out=0 → skip building minted-out payload (client already cached); still harvest for hot filter
+  const wantMintedOutPayload = opts.includeMintedOut !== false && Number(opts.outLimit) !== 0;
 
   const windowMs = windowMin * 60 * 1000;
-  const hot = aggregate(windowMs).slice(0, hotLimit);
-  const hot1 = aggregate(60 * 1000).slice(0, 10);
-  const hot15 = aggregate(15 * 60 * 1000).slice(0, 10);
-  const mintedOut = collectMintedOut(outLimit);
+  // Archive any live sold-outs first so hot filter + payload stay consistent
+  harvestMintedOut();
+  const hot = excludeMintedOutRows(aggregate(windowMs)).slice(0, hotLimit);
+  const hot1 = excludeMintedOutRows(aggregate(60 * 1000)).slice(0, 10);
+  const hot15 = excludeMintedOutRows(aggregate(15 * 60 * 1000)).slice(0, 10);
+  const mintedOut = wantMintedOutPayload ? collectMintedOut(outLimit) : [];
 
   /** @type {Set<string>} */
   const feedPriceDone = new Set();

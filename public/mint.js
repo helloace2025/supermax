@@ -184,6 +184,17 @@
   let lastFeedKeys = new Set();
   /** last successful API payload — re-render on language switch */
   let lastData = null;
+  /**
+   * Sticky client-side minted-out archive (contract → row).
+   * Once listed, panel is NOT re-polled/re-rendered every few seconds — only when
+   * a new sold-out collection is detected (from hot scan or first server bootstrap).
+   */
+  /** @type {Map<string, object>} */
+  const localMintedOut = new Map();
+  /** Signature of contracts currently painted in #mintedOut */
+  let mintedOutPaintSig = "";
+  /** After first successful bootstrap of mintedOut from API, later polls use out=0 */
+  let mintedOutBootstrapped = false;
   let blockedPanelOpen = false;
   let favoritesPanelOpen = false;
   /** Ignore document-level close for the same click that opened the panel */
@@ -280,7 +291,7 @@
       symbol: row.symbol || null,
     });
     persistBlocked();
-    if (lastData) renderAll(lastData);
+    if (lastData) renderAll(lastData, { forceMintedOut: true });
     else updateBlockedUi();
   }
 
@@ -289,7 +300,7 @@
     blocked.delete(c);
     blockedMeta.delete(c);
     persistBlocked();
-    if (lastData) renderAll(lastData);
+    if (lastData) renderAll(lastData, { forceMintedOut: true });
     else updateBlockedUi();
   }
 
@@ -297,7 +308,7 @@
     blocked.clear();
     blockedMeta.clear();
     persistBlocked();
-    if (lastData) renderAll(lastData);
+    if (lastData) renderAll(lastData, { forceMintedOut: true });
     else updateBlockedUi();
   }
 
@@ -374,7 +385,7 @@
       opensea: next.opensea || prev.opensea || openseaUrl(c),
     });
     persistFavorites();
-    if (lastData) renderAll(lastData);
+    if (lastData) renderAll(lastData, { forceMintedOut: true });
     else updateFavoritesUi();
   }
 
@@ -383,7 +394,7 @@
     favorites.delete(c);
     favoritesMeta.delete(c);
     persistFavorites();
-    if (lastData) renderAll(lastData);
+    if (lastData) renderAll(lastData, { forceMintedOut: true });
     else updateFavoritesUi();
   }
 
@@ -398,7 +409,7 @@
     favorites.clear();
     favoritesMeta.clear();
     persistFavorites();
-    if (lastData) renderAll(lastData);
+    if (lastData) renderAll(lastData, { forceMintedOut: true });
     else updateFavoritesUi();
   }
 
@@ -589,7 +600,7 @@
     }
     applyStaticI18n();
     if (lastData) {
-      renderAll(lastData);
+      renderAll(lastData, { forceMintedOut: true });
     } else {
       els.statusLine.textContent = t("statusWaiting");
     }
@@ -838,8 +849,59 @@
     return `${t.slice(0, max)}…`;
   }
 
+  /** Sold-out if server flag or minted >= maxSupply */
+  function isMintedOutRow(r) {
+    if (!r) return false;
+    if (r.mintedOut === true) return true;
+    const minted = Number(r.minted ?? r.totalSupply);
+    const max = Number(r.maxSupply);
+    return (
+      Number.isFinite(minted) &&
+      Number.isFinite(max) &&
+      max > 0 &&
+      minted >= max
+    );
+  }
+
+  /**
+   * Hot leaderboard: never show sold-out (server filters too; client is belt-and-suspenders).
+   * New mint-outs found here are absorbed into localMintedOut.
+   */
   function pickHot(data) {
-    return data.hot || [];
+    const raw = Array.isArray(data?.hot) ? data.hot : [];
+    const kept = [];
+    for (const r of raw) {
+      const c = String(r?.contract || "").toLowerCase();
+      if (c && localMintedOut.has(c)) continue;
+      if (isMintedOutRow(r)) {
+        if (c) absorbMintedOutRow(r);
+        continue;
+      }
+      kept.push(r);
+    }
+    return kept;
+  }
+
+  /** Merge one sold-out row into sticky local archive. Returns true if newly added. */
+  function absorbMintedOutRow(r) {
+    const c = String(r?.contract || "").toLowerCase();
+    if (!c || c.length < 10) return false;
+    if (localMintedOut.has(c)) {
+      // Keep first snapshot stable — no thrashing fields every poll
+      return false;
+    }
+    localMintedOut.set(c, { ...r, contract: c, mintedOut: true });
+    return true;
+  }
+
+  function localMintedOutList() {
+    return [...localMintedOut.values()]
+      .filter((r) => !isBlocked(r.contract) && !isLpNft(r))
+      .sort((a, b) => (Number(b.lastTs) || 0) - (Number(a.lastTs) || 0));
+  }
+
+  function mintedOutSignature(list) {
+    return list.map((r) => String(r.contract || "").toLowerCase()).join("|");
   }
 
   /** Always hide Uniswap LP position NFTs (no UI toggle). */
@@ -911,7 +973,7 @@
     persistPriceFilter();
     syncPriceFilterUi();
     closePriceFilterMenu();
-    if (lastData) renderAll(lastData);
+    if (lastData) renderAll(lastData, { forceMintedOut: true });
   }
 
   function isPriceFilterMenuOpen() {
@@ -1157,11 +1219,45 @@
       .join("");
   }
 
-  /** Bottom-right: sold-out collections (same card scroll pattern as live feed). */
-  function renderMintedOut(data) {
+  /**
+   * Ingest sold-outs from API bootstrap and/or hot scan.
+   * Returns whether local archive gained any new contract.
+   */
+  function ingestMintedOutFromData(data) {
+    let added = false;
+    const serverList = Array.isArray(data?.mintedOut) ? data.mintedOut : [];
+    for (const r of serverList) {
+      if (isMintedOutRow(r) || r?.mintedOut) {
+        if (absorbMintedOutRow(r)) added = true;
+      }
+    }
+    // Scan hot: mint-out → move into sticky 已铸完 (even if still present one tick)
+    for (const r of Array.isArray(data?.hot) ? data.hot : []) {
+      if (isMintedOutRow(r) && absorbMintedOutRow(r)) added = true;
+    }
+    return added;
+  }
+
+  /**
+   * Bottom-right sold-out panel — sticky local list.
+   * force=true: language/theme/blocklist change must repaint.
+   * Otherwise only paint when contract set changes (no 4s flicker).
+   */
+  function renderMintedOut(data, { force = false } = {}) {
     if (!els.mintedOut) return;
-    let list = Array.isArray(data.mintedOut) ? data.mintedOut : [];
-    list = list.filter((r) => !isBlocked(r.contract) && !isLpNft(r));
+    if (data) ingestMintedOutFromData(data);
+
+    const list = localMintedOutList();
+    const sig = mintedOutSignature(list);
+    if (!force && sig === mintedOutPaintSig && mintedOutPaintSig !== "") {
+      return;
+    }
+    // Empty list: still paint once (or when forced) so empty-state i18n is correct
+    if (!force && sig === mintedOutPaintSig && list.length === 0 && els.mintedOut.dataset.outReady === "1") {
+      return;
+    }
+    mintedOutPaintSig = sig;
+    els.mintedOut.dataset.outReady = "1";
 
     if (!list.length) {
       els.mintedOut.innerHTML = `<div class="empty">${escapeHtml(t("outEmpty"))}</div>`;
@@ -1233,10 +1329,11 @@
     }
   }
 
-  function renderAll(data) {
+  function renderAll(data, { forceMintedOut = false } = {}) {
+    // Hot first so pickHot can absorb any residual mint-outs into local archive
     renderHot(data);
     renderFeed(data);
-    renderMintedOut(data);
+    renderMintedOut(data, { force: forceMintedOut });
     renderStatus(data);
     updateBlockedUi();
     updateFavoritesUi();
@@ -1454,14 +1551,20 @@
         window: String(RANK_WINDOW_MIN),
         feed: "100",
         hot: "30",
+        out: "50",
       });
       const res = await fetch(`/api/mints?${qs}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (data.error) throw new Error(data.error);
 
+      // Merge server archive + any residual hot mint-outs into sticky local map
+      ingestMintedOutFromData(data);
+      mintedOutBootstrapped = true;
+
       lastData = data;
-      renderAll(data);
+      // 已铸完: renderMintedOut only paints when contract set changes (no 4s DOM thrash)
+      renderAll(data, { forceMintedOut: false });
     } catch (e) {
       els.statusLine.textContent = e.message || String(e);
     }
@@ -1492,14 +1595,21 @@
 
   function rowFromContract(addr) {
     let row = { contract: addr };
-    if (lastData) {
-      const all = [...(lastData.hot || []), ...(lastData.feed || [])];
+    const key = String(addr || "").toLowerCase();
+    if (localMintedOut.has(key)) {
+      row = localMintedOut.get(key);
+    } else if (lastData) {
+      const all = [
+        ...(lastData.hot || []),
+        ...(lastData.feed || []),
+        ...(lastData.mintedOut || []),
+      ];
       const hit = all.find(
-        (x) => String(x.contract || "").toLowerCase() === addr
+        (x) => String(x.contract || "").toLowerCase() === key
       );
       if (hit) row = hit;
     } else if (isFavorite(addr)) {
-      const meta = favoritesMeta.get(String(addr || "").toLowerCase()) || {};
+      const meta = favoritesMeta.get(key) || {};
       row = { contract: addr, ...meta };
     }
     return row;

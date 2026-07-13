@@ -70,10 +70,16 @@ app.get("/api/status", (_req, res) => {
 
 app.get("/api/mints", (req, res) => {
   try {
+    // out=0 → omit mintedOut array (client keeps sticky local list; still harvested server-side for hot filter)
+    const outRaw = req.query.out;
+    const outLimit =
+      outRaw === "0" || outRaw === 0 ? 0 : outRaw != null ? outRaw : 50;
     const snap = getMintSnapshot({
       windowMin: req.query.window,
       feedLimit: req.query.feed,
       hotLimit: req.query.hot,
+      outLimit,
+      includeMintedOut: outLimit !== 0,
     });
     res.json(snap);
   } catch (e) {
