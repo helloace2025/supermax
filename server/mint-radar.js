@@ -5,7 +5,14 @@
  * HTTP: Node 20+ built-in fetch only (undici@8 crashes on Node 20.19 —
  * `webidl.util.markAsUncloneable is not a function`).
  * For local Clash, use TUN/system proxy — do not rely on HTTPS_PROXY+undici.
+ *
+ * Minted-out archive: once a collection is detected as sold out it is kept in
+ * memory + JSON file (DATA_DIR) so it does not disappear when mint events age out.
  */
+
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 
 /** API base (public explorer or PRO gateway e.g. https://api.blockscout.com/4663) */
 const BLOCKSCOUT_API = (
@@ -54,6 +61,14 @@ const JUNK_RE =
   /gift|claim|airdrop|alert|reward|free\s*nft|scan\s*link|important/i;
 
 const MAX_EVENTS = 4000;
+/** Sticky minted-out history (survives event eviction; file survives restarts if volume set) */
+const __radarDir = path.dirname(fileURLToPath(import.meta.url));
+const DATA_DIR = process.env.DATA_DIR || path.join(__radarDir, "..", "data");
+const MINTED_OUT_FILE = path.join(DATA_DIR, "minted-out.json");
+/** @type {Map<string, object>} contract -> archived sold-out row */
+const mintedOutArchive = new Map();
+let mintedOutSaveTimer = null;
+
 /** Main mint poll interval — leave headroom under Blockscout rate limits */
 const POLL_MS = 2000;
 const FETCH_TIMEOUT_MS = 12000;
@@ -984,6 +999,9 @@ async function pollOnce() {
     if (lastErr) {
       lastError = lastErr.message || String(lastErr);
       console.error("[mint-radar] poll failed:", lastError);
+    } else {
+      // Archive any newly sold-out collections after a successful poll
+      harvestMintedOut();
     }
   } catch (e) {
     // Never let poll crash the process (Railway marks CRASHED on unhandled rejections)
@@ -1166,22 +1184,138 @@ function aggregate(windowMs) {
   return list;
 }
 
-/** Recently sold-out collections (maxSupply known & minted >= max). */
-function collectMintedOut(limit = 20) {
-  // Cover entire in-memory store (not just 1h heat window)
-  const windowMs = 30 * 24 * 60 * 60 * 1000;
-  const n = Math.max(5, Math.min(40, Number(limit) || 20));
-  return aggregate(windowMs)
-    .filter((r) => r && r.mintedOut)
-    .sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0))
-    .slice(0, n);
+function loadMintedOutArchive() {
+  try {
+    if (!fs.existsSync(MINTED_OUT_FILE)) return;
+    const raw = JSON.parse(fs.readFileSync(MINTED_OUT_FILE, "utf8"));
+    const list = Array.isArray(raw) ? raw : raw?.items;
+    if (!Array.isArray(list)) return;
+    for (const row of list) {
+      const c = String(row?.contract || "").toLowerCase();
+      if (!c || c.length < 10) continue;
+      mintedOutArchive.set(c, { ...row, contract: c, mintedOut: true });
+    }
+    console.log(
+      `[mint-radar] loaded ${mintedOutArchive.size} minted-out archive from ${MINTED_OUT_FILE}`
+    );
+  } catch (e) {
+    console.warn("[mint-radar] load minted-out archive failed:", e.message || e);
+  }
+}
+
+function saveMintedOutArchive() {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    const items = [...mintedOutArchive.values()].sort(
+      (a, b) => (b.lastTs || 0) - (a.lastTs || 0)
+    );
+    fs.writeFileSync(
+      MINTED_OUT_FILE,
+      JSON.stringify({ version: 1, updatedAt: Date.now(), items }, null, 0),
+      "utf8"
+    );
+  } catch (e) {
+    console.warn("[mint-radar] save minted-out archive failed:", e.message || e);
+  }
+}
+
+function scheduleSaveMintedOutArchive() {
+  if (mintedOutSaveTimer) return;
+  mintedOutSaveTimer = setTimeout(() => {
+    mintedOutSaveTimer = null;
+    saveMintedOutArchive();
+  }, 1500);
+}
+
+/**
+ * Persist a sold-out collection permanently (until process+disk wiped).
+ * Does not remove entries when they fall off the live mint window.
+ */
+function rememberMintedOut(row) {
+  if (!row?.mintedOut) return;
+  const c = String(row.contract || "").toLowerCase();
+  if (!c || c.length < 10) return;
+  const prev = mintedOutArchive.get(c) || {};
+  const rowTs = Number(row.lastTs) || 0;
+  const prevTs = Number(prev.lastTs) || 0;
+  const lastTs = Math.max(rowTs, prevTs, Date.now());
+  // Merge fields; prefer non-null newer values — never delete the archive key
+  mintedOutArchive.set(c, {
+    contract: c,
+    name: row.name || prev.name || null,
+    symbol: row.symbol || prev.symbol || null,
+    icon: row.icon || prev.icon || null,
+    maxSupply: row.maxSupply ?? prev.maxSupply ?? null,
+    minted: row.minted ?? row.totalSupply ?? prev.minted ?? null,
+    totalSupply: row.totalSupply ?? row.minted ?? prev.totalSupply ?? null,
+    holders: row.holders ?? prev.holders ?? null,
+    lastMintAt:
+      rowTs >= prevTs
+        ? row.lastMintAt || prev.lastMintAt || null
+        : prev.lastMintAt || row.lastMintAt || null,
+    lastTs,
+    lastTx:
+      rowTs >= prevTs
+        ? row.lastTx || prev.lastTx || null
+        : prev.lastTx || row.lastTx || null,
+    explorerToken:
+      row.explorerToken || prev.explorerToken || `${EXPLORER}/token/${c}`,
+    explorerTx: row.explorerTx || prev.explorerTx || null,
+    opensea:
+      row.opensea ||
+      prev.opensea ||
+      `https://opensea.io/contract/${OPENSEA_CHAIN}/${c}`,
+    priceDisplay: row.priceDisplay || prev.priceDisplay || null,
+    priceEth: row.priceEth ?? prev.priceEth ?? null,
+    priceWei: row.priceWei ?? prev.priceWei ?? null,
+    mintedOut: true,
+    archivedAt: prev.archivedAt || Date.now(),
+    updatedAt: Date.now(),
+  });
+  scheduleSaveMintedOutArchive();
+}
+
+/** Pull live sold-out detections into the sticky archive. */
+function harvestMintedOut() {
+  try {
+    const windowMs = 30 * 24 * 60 * 60 * 1000;
+    for (const r of aggregate(windowMs)) {
+      if (r?.mintedOut) rememberMintedOut(r);
+    }
+  } catch (e) {
+    console.warn("[mint-radar] harvestMintedOut:", e.message || e);
+  }
+}
+
+/**
+ * Sold-out list = sticky archive (history) ∪ live detections.
+ * Entries are not deleted when mint events age out of the rolling store.
+ */
+function collectMintedOut(limit = 50) {
+  harvestMintedOut();
+  const n = Math.max(5, Math.min(100, Number(limit) || 50));
+  const list = [...mintedOutArchive.values()].map((r) => {
+    const m = getMeta(r.contract);
+    return {
+      ...r,
+      icon: m.icon || r.icon || null,
+      twitter: m.twitter || null,
+      discord: m.discord || null,
+      telegram: m.telegram || null,
+      website: m.website || null,
+      opensea: m.opensea || r.opensea,
+      mintedOut: true,
+    };
+  });
+  list.sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0));
+  return list.slice(0, n);
 }
 
 export function getMintSnapshot(opts = {}) {
   const windowMin = Math.max(1, Math.min(60, Number(opts.windowMin) || 60));
   const feedLimit = Math.max(10, Math.min(200, Number(opts.feedLimit) || 80));
   const hotLimit = Math.max(5, Math.min(50, Number(opts.hotLimit) || 25));
-  const outLimit = Math.max(5, Math.min(40, Number(opts.outLimit) || 20));
+  const outLimit = Math.max(5, Math.min(100, Number(opts.outLimit) || 50));
 
   const windowMs = windowMin * 60 * 1000;
   const hot = aggregate(windowMs).slice(0, hotLimit);
@@ -1251,15 +1385,18 @@ export function getMintSnapshot(opts = {}) {
     hot1m: hot1,
     hot15m: hot15,
     feed: events,
-    /** Sold-out collections still in radar memory (recent last mint first) */
+    /** Sticky sold-out history (file-backed; not cleared when events age out) */
     mintedOut,
+    mintedOutArchiveSize: mintedOutArchive.size,
     blacklist: [...BLACKLIST],
   };
 }
 
 export function startMintRadar() {
   if (pollTimer) return;
+  loadMintedOutArchive();
   console.log("[mint-radar] starting (Blockscout poll)");
+  console.log(`[mint-radar] DATA_DIR=${DATA_DIR}`);
   safePollOnce();
   pollTimer = setInterval(safePollOnce, POLL_MS);
 }

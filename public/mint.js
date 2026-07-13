@@ -46,7 +46,7 @@
       feedEmpty: "暂无铸造事件",
       outTitle: "🏁 已铸完",
       outHint: "MINT OUT · 仍可跟进",
-      outEmpty: "暂无已铸完项目（需读到 maxSupply）",
+      outEmpty: "暂无已铸完项目（需读到 maxSupply 且已铸满；进入后会保留历史）",
       statusWaiting: "等待数据…",
       footerNote: "数据源：Blockscout REST · 无需自建节点（后续可升级 RPC eth_getLogs）",
       justNow: "刚刚",
@@ -112,7 +112,7 @@
       feedEmpty: "No mint events yet",
       outTitle: "🏁 Minted Out",
       outHint: "MINT OUT · still trackable",
-      outEmpty: "No sold-out collections yet (needs maxSupply)",
+      outEmpty: "No sold-out collections yet (needs maxSupply + full mint; history is kept once listed)",
       statusWaiting: "Waiting for data…",
       footerNote:
         "Source: Blockscout REST · No self-hosted node (RPC eth_getLogs later)",

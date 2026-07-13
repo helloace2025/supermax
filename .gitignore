@@ -11,3 +11,6 @@ Thumbs.db
 *.swp
 .npm/
 coverage/
+# Runtime minted-out archive (use Railway Volume on DATA_DIR to keep across deploys)
+data/minted-out.json
+data/*.json
