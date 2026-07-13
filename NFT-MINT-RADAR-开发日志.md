@@ -1,8 +1,9 @@
-# ROBIN NFT Radar — 原型开发日志
+# ROBIN NFT Radar — 开发日志
 
-> **文档用途**：记录 2026-07-12 前后「NFT 铸造监控面板」原型的完整开发过程、产品定位、技术实现与后续重构参考。  
-> **可迁移**：新建独立项目文件夹时，把本文件拷过去即可作为重建蓝本。  
-> **状态**：原型验证（Prototype），非生产最终版。
+> **文档用途**：记录 Robinhood Chain「NFT 铸造监控面板」从原型到当前可部署版本的产品定位、功能清单、技术实现与运维注意。  
+> **可迁移**：新建独立项目时，把本文件 + 代码结构对照即可重建。  
+> **状态**：已上线验证（Railway 部署）；仓库 `helloace2025/supermax`。  
+> **文档更新**：2026-07-13（对齐当前全部已交付功能）。
 
 ---
 
@@ -10,30 +11,34 @@
 
 ### 1.1 一句话
 
-**Robinhood Chain 上的实时 NFT 铸造雷达**：看当前哪些集合正在被大量 mint，辅助发现链上 alpha。
+**Robinhood Chain 上的实时 NFT 铸造雷达**：看当前哪些集合正在被大量 mint，并跟踪已铸完项目。
 
 ### 1.2 要解决的问题
 
-- 新链（Robinhood Chain, chainId **4663**）上 NFT 公售 / free mint 活跃，缺少好用的垂直监控工具。
-- 通用浏览器（Blockscout）能查单笔交易，但不聚合「谁在猛铸」。
-- 目标用户：链上交易者、mint 猎人、项目方（后期可能买推广）。
+- 新链（Robinhood Chain, chainId **4663**）上 NFT 公售 / free mint 活跃，缺少垂直监控工具。
+- Blockscout 能查单笔交易，但不聚合「谁在猛铸」。
+- 目标用户：链上交易者、mint 猎人；后续可扩展发射台 / AI 画图等（**未做**）。
 
-### 1.3 明确不做（原型阶段）
+### 1.3 明确不做 / 未做
 
-- 不托管用户资产、不连接钱包铸造（讨论过，未实现）。
-- 不保证 mint 收益、不构成投资建议。
-- 自然热榜不卖排名（若做广告，应单独「推广位」并标注 Sponsored）。
+| 项 | 状态 |
+|----|------|
+| 站内 mint / 发射台 | 未做（讨论过架构） |
+| AI 画 NFT | 未做 |
+| 卖热榜排名 | 不做；若广告应独立 Sponsored 位 |
+| 多链 | 当前仅 Robinhood Chain |
 
-### 1.4 与同仓库其它产品的关系
+### 1.4 仓库形态（当前）
 
-当前仓库 `监控面板` 里其实有两套东西：
+已收敛为 **单一产品**：
 
-| 模块 | 入口 | 作用 |
-|------|------|------|
-| **钱包交叉买入监控**（原有） | `http://localhost:3789/` → `public/index.html` | 多钱包同时买过的 ERC-20 代币 |
-| **NFT Mint Radar**（本次新建） | `http://localhost:3789/mint.html` | ERC-721 铸造热榜 + 实时流 |
+| 入口 | 作用 |
+|------|------|
+| `GET /` → `public/mint.html` | 铸造雷达主站 |
+| `GET /api/mints` | 热榜 + 实时流 + 已铸完快照 |
+| `GET /api/health` | Railway 健康检查（纯 `ok`） |
 
-重构时建议：**拆成独立 repo / 独立文件夹**，本日志只服务 Mint Radar。
+旧「钱包交叉买入监控」相关代码已不在本仓库主路径中。
 
 ---
 
@@ -46,279 +51,245 @@
 | 原生币 | ETH |
 | 浏览器 | https://robinhoodchain.blockscout.com |
 | 公开 RPC | https://rpc.mainnet.chain.robinhood.com |
-| 平均出块 | ~100ms 量级（以 explorer stats 为准） |
 | OpenSea chain slug | `robinhood` |
-| SeaDrop（常见 mint 入口） | `0x00005EA00Ac477B1030CE78506496e8C2dE24bf5` |
-| OpenSea 平台费收款（常见） | `0x0000a26b00c1F0DF003000390027140000fAa719` |
+| SeaDrop（常见） | `0x00005EA00Ac477B1030CE78506496e8C2dE24bf5` |
 
-### OpenSea 链接规则
+### OpenSea 链接
 
-- 集合/合约页：`https://opensea.io/contract/robinhood/{contract}`
-- 单 token：`https://opensea.io/item/robinhood/{contract}/{tokenId}`
-- 有 slug 时也可用：`https://opensea.io/collection/{slug}`
+- 合约：`https://opensea.io/contract/robinhood/{contract}`
+- Token：`https://opensea.io/item/robinhood/{contract}/{tokenId}`
 
-### Mint 判定（链上语义）
+### Mint 判定
 
-- ERC-721 `Transfer`，**from = `0x000…000`** → 铸造  
-- Blockscout 常标 `type: token_minting`  
-- 注意噪音：Uniswap V3/V4 Position NFT、钓鱼 Gift/Airdrop 等
-
-### SeaDrop 付费 mint 分账（实测结论）
-
-公开 `mintPublic` 时，用户支付的 **value** 一般拆成：
-
-1. **feeBps** 部分 → `feeRecipient`（多为 OpenSea `0x0000a26b…`）  
-2. 剩余 → SeaDrop 上该 NFT 配置的 **`getCreatorPayoutAddress(nft)`**（项目方收款地址）
-
-Explorer 上 internal txs 可能为空，但事件 `SeaDropMint` + 链上 `getCreatorPayoutAddress` 可还原。  
-示例交易：`0xeb4fbb62c87e2701646487cf09bf8b718cd7a5e285bde5194ceb3a9d571ab4a3`（Hood Pudgy，5 个，单价 0.00001 ETH，feeBps=1000）。
+- ERC-721 `Transfer`，**from = `0x0…0`** → 铸造  
+- 噪音需过滤：UNI Position NFT、gift/airdrop 钓鱼、**veNFT / 投票锁仓类**
 
 ---
 
-## 3. 数据从哪来（重要）
-
-### 3.1 当前架构：近实时，不是直连节点扫 logs
+## 3. 数据架构
 
 ```
 链上出块
   → Blockscout 索引
-  → 本机后端轮询 REST（约 2s）
-  → 内存滑动窗口聚合
-  → 前端轮询 /api/mints（约 2.5s）
+  → 后端轮询 REST（默认 5s）
+  → 内存滑动窗口聚合 + 已铸完文件归档
+  → 前端轮询 GET /api/mints（默认 4s）
 ```
 
-**结论**：是 **索引层近实时**，延迟通常数秒级；**没有** mempool、**没有** `eth_subscribe` logs。
+- **近实时**（秒级），非 mempool / 非 `eth_subscribe`。  
+- 后端：`POLL_MS = 5000`  
+- 前端：`setInterval(refresh, 4000)`  
+- 每轮 advanced-filters 最多翻 **3 页**（有足够新 mint 时提前停）
 
-### 3.2 主数据源
+### 主数据源
 
 | 用途 | 接口 |
 |------|------|
-| 全链 ERC-721 动态 | `GET {blockscout}/api/v2/advanced-filters?transaction_types=ERC-721` |
-| 单笔 token transfers | `GET …/api/v2/transactions/{hash}/token-transfers` |
-| 集合元数据 | `GET …/api/v2/tokens/{address}` |
-| 实例图兜底 | `GET …/api/v2/tokens/{address}/instances` |
-| Logo + 社交 | OpenSea API（见下） |
+| ERC-721 动态 | `…/api/v2/advanced-filters?transaction_types=ERC-721` |
+| 交易 value / 单价 | 交易详情 + 同 tx mint 数量均分 |
+| 合集 meta / 社交 | OpenSea API + Blockscout 兜底 |
+| maxSupply | 合约 eth_call：`maxSupply()` / `MAX_SUPPLY()` |
 
-### 3.3 OpenSea 元数据 enrichment
+### 本机代理（开发必看）
 
-1. `GET https://api.opensea.io/api/v2/chain/robinhood/contract/{addr}` → `collection` slug  
-2. `GET https://api.opensea.io/api/v2/collections/{slug}` →  
-   - `image_url`（logo）  
-   - `twitter_username`  
-   - `discord_url` / `telegram_url` / `project_url`  
-   - `opensea_url` / description  
-
-未上架或未填社交 → icon 用 Blockscout 实例图或占位字母；社交图标 **仍显示但不可点**。
-
-### 3.4 Blockscout PRO API（用户已注册 DevPortal，原型未强制接入）
-
-- 网关：`https://api.blockscout.com/{chainId}/api/v2/...?apikey=`  
-- Robinhood **已支持** chainId `4663`  
-- Free：约 100k credits / 周期，5 rps  
-- 可作后续更稳数据源；注意 advanced-filters 等 endpoint 耗 credit  
-
-### 3.5 本机网络注意
-
-- Windows 上 Node 原生 `fetch` **不一定走系统代理**。  
-- 开发环境使用了 `HTTP(S)_PROXY=http://127.0.0.1:7897`（Clash 等）。  
-- 解决：依赖 **`undici`** 的 `ProxyAgent` + `fetch`（见 `server/mint-radar.js`）。
+- Windows 上 Node **全局 fetch 不走** `HTTPS_PROXY`。  
+- 当前实现：存在 `HTTP(S)_PROXY` 时用 **`undici` `ProxyAgent`** 出站（Clash `127.0.0.1:7897` 等）。  
+- Railway 无代理时走普通 fetch。
 
 ---
 
-## 4. 今天做了什么（按时间线）
+## 4. 当前功能清单（截止 2026-07-13）
 
-1. **调研**  
-   - 确认 Blockscout 可解析 NFT mint（from=0、token_minting、SeaDrop mintPublic）。  
-   - 评估做实时面板的可行性与瓶颈（索引 vs 节点）。
+### 4.1 铸造热榜
 
-2. **新建 Mint Radar 后端**  
-   - `server/mint-radar.js`：轮询、去噪、聚合、元数据队列。  
-   - `server/index.js`：注册 `GET /api/mints`，启动时 `startMintRadar()`。
+| 列 | 说明 |
+|----|------|
+| # / 集合 | 头像、进度条、名称、符号、社交、Explorer、收藏/屏蔽 |
+| 5 分钟 / 30 分钟 / 1 小时 | 窗口内 mint 次数；排序主维度为 **1h** |
+| 价格 | 参考单价；**免费** / 付费 ETH；支持筛选全部/免费/付费 |
+| Holders | 持有人数 |
+| 已铸造 | 可信 NFT 件数；异常 totalSupply 已消毒 |
+| 最近 | 相对时间 |
 
-3. **新建前端页**  
-   - `public/mint.html` / `mint.css` / `mint.js`  
-   - 热榜（1/5/15 分钟）、实时流、过滤 LP、OpenSea/Explorer 链接。
+- 表格 **列宽均分** 撑满热榜面板（集合固定左栏，指标区均分剩余宽度）。  
+- **铸完项目不进热榜**（服务端过滤 + 前端兜底）。  
+- **高风险角标**：已铸造 ÷ Holders > 10 时显示警示。  
+- **铸造进度条**：`minted / maxSupply`；未知上限显示 `—`；铸满可显示 MINT OUT。
 
-4. **产品迭代**  
-   - 集合 OpenSea 链接。  
-   - Logo + 社交 enrichment（OpenSea + Blockscout 兜底）。  
-   - 社交改为固定三图标：X / Website / OpenSea（无链接则灰显不可点）。  
-   - OpenSea 图标换成品牌图 `public/opensea-icon.jpg`。  
-   - 站点 favicon：`public/favicon.svg`。  
-   - 顶部 KPI 从「1/5/15 分钟铸造总数」改为关键小指标（最热、速度、独立 minter、新盘、最近一笔、区块）。
+### 4.2 实时铸造流
 
-5. **产品/商业讨论（未写代码）**  
-   - 连钱包站内 mint 难度（public 易、allowlist proof 难）。  
-   - 变现：推广位广告 vs 会员 vs Launchpad vs 官方代币。  
-   - 原则建议：工具中立热榜与发行/广告品牌隔离。
+- 最近 ERC-721 从 0x0 的 mint 事件。  
+- 展示 tokenId、方法、价格、minter、tx 链接。  
+- 过滤：屏蔽列表、LP NFT、ve/gov NFT。
 
-6. **链上拆账验证**  
-   - 解析 SeaDrop mint 交易 value 去向（OS fee + creator payout）。
+### 4.3 已铸完
+
+- 条件：读到 **maxSupply** 且 **minted ≥ maxSupply**。  
+- **粘性归档**：内存 Map + `DATA_DIR/minted-out.json`（进程重启可恢复，若挂载了 volume）。  
+- 进入列表后前端 **不按 4s 整表重绘**（仅合约集合变化时更新 DOM）。  
+- 空状态文案：`暂无已铸完项目`（无技术说明括号）。
+
+### 4.4 交互与账户向
+
+| 功能 | 说明 |
+|------|------|
+| 收藏 | localStorage；顶栏按钮 + 浮层 |
+| 屏蔽 | localStorage；热榜/流/已铸完均隐藏 |
+| 连接钱包 | 浏览器钱包；断开菜单 |
+| 主题 | Light / Dark |
+| 语言 | 中文 / EN |
+| 立即刷新 | 手动拉 `/api/mints` |
+
+### 4.5 顶栏与更新日志
+
+- 链接：`Twitter · 更新`（已去掉空 Telegram）。  
+- **更新** 浮层：静态数组 `UPDATES`（`public/mint.js` 顶部）。  
+- 约定：只记用户可感知的改动；**细枝末节不写**；推送 GitHub 前可先过文案。
+
+### 4.5.1 Blockscout 状态警示（2026-07-13）
+
+数据源依赖 Blockscout；浏览器宕机时热榜会「假死」（如 5m/30m 全 0、最近 mint 停更），需与「链本身正常」区分。
+
+| UI | 行为 |
+|----|------|
+| 顶栏状态胶囊 | **正常**：绿色 `Blockscout live`；**故障**：红色文案（如「Blockscout 故障」） |
+| 故障横幅 | 说明原因 + 最近 mint / 轮询指标 + 打开 Blockscout 链接；**可关闭**（红标仍保留至恢复） |
+| 判定（摘要） | 5m/10m 窗口有数据 → 强制正常；长时间无 5m/30m 且最新 mint ≥20–30m，或轮询失败/限流 → 故障 |
+
+实现：`server/mint-radar.js` → `computeHealth()`；`public/mint.js` 渲染芯片与横幅；样式 `mint.css`。
+
+### 4.6 去噪与数据消毒
+
+| 规则 | 作用 |
+|------|------|
+| 合约黑名单 | Uniswap V3/V4 Positions 等 |
+| 名称垃圾正则 | gift / claim / airdrop… |
+| **veNFT / 投票锁仓** | 名称、符号 `ve*`、方法 create_lock 等；离谱 totalSupply+少 holders |
+| **已铸造 sanitize** | 拒绝天文数字 / 类 ERC-20 供应量（避免 ve 权重当件数） |
+| **免费展示** | `0` / `0 ETH` / Free → UI「免费」 |
+
+### 4.7 部署与运维
+
+| 项 | 说明 |
+|----|------|
+| 托管 | **Railway**（GitHub 推送自动部署） |
+| 健康检查 | `/api/health` → `ok` |
+| 监听 | `0.0.0.0:$PORT`（默认 3789） |
+| 依赖 | `express`、`undici`；Node ≥ 20 |
+| 资源尖峰 | 链上 mint 突增时 poll 翻页 + 价格/meta 队列 → **CPU 与 egress 同步升高**（正常） |
 
 ---
 
-## 5. 代码结构（Mint Radar 相关）
+## 5. 代码结构（当前）
 
 ```
-监控面板/
-├── package.json                 # express, undici；scripts: start / dev
+项目根/
+├── package.json              # express + undici；start / dev
+├── railway.toml / nixpacks.toml
 ├── server/
-│   ├── index.js                 # Express 入口；/api/mints；静态 public
-│   ├── mint-radar.js            # ★ 铸造雷达核心
-│   ├── scanner.js               # （原有）钱包交叉扫描，与 mint 无关
-│   ├── gmgn.js / noxa.js        # （原有）代币社交/行情
-│   └── ...
+│   ├── index.js              # Express：static、health、/api/mints、/
+│   └── mint-radar.js         # 轮询、聚合、meta、价格、已铸完归档、代理
 ├── public/
-│   ├── mint.html                # ★ 铸造雷达页面
+│   ├── mint.html             # 主 UI
 │   ├── mint.css
-│   ├── mint.js
-│   ├── favicon.svg              # 站点图标
-│   ├── opensea-icon.jpg         # OpenSea 船标
-│   ├── index.html               # 原交叉买入面板
-│   └── ...
-└── NFT-MINT-RADAR-开发日志.md   # 本文件
+│   ├── mint.js               # 渲染、i18n、收藏/屏蔽、更新日志、钱包
+│   ├── favicon.svg
+│   ├── opensea-icon.jpg
+│   └── brand/                # logo 等
+├── data/                     # 本地/容器：minted-out.json（可选挂载）
+└── NFT-MINT-RADAR-开发日志.md
 ```
 
-### 5.1 后端要点 `mint-radar.js`
-
-- 轮询间隔：`POLL_MS ≈ 2000`  
-- 事件缓存：最多约 4000 条，丢弃 30 分钟前  
-- 过滤：  
-  - 仅 ERC-721 且 from=0  
-  - 黑名单 LP：UNI-V3/V4 Positions 合约  
-  - 名称启发式垃圾：gift/claim/airdrop/alert…  
-- 聚合窗口：1m / 5m / 15m  
-- 热度 score（简化）：mints、unique minters、mintsPerMin、低 supply 加权  
-- 元数据：队列 + 限速（约 350ms）、TTL（成功 30m / 失败 5m）  
-- 代理：读 `HTTPS_PROXY` / `HTTP_PROXY`
-
-### 5.2 API
+### 5.1 API
 
 ```http
-GET /api/mints?window=5&feed=100&hot=30
+GET /api/mints?window=60&feed=100&hot=30&out=50
 ```
 
-响应大致结构：
+| 参数 | 含义 |
+|------|------|
+| window | 热榜窗口（分钟） |
+| feed | 实时流条数 |
+| hot | 热榜条数 |
+| out | 已铸完条数；`0` 可省略 payload（前端可粘性缓存） |
 
-```json
-{
-  "ok": true,
-  "chain": { "name": "Robinhood Chain", "explorer": "..." },
-  "status": {
-    "lastPollAt": "...",
-    "lastError": null,
-    "pollCount": 0,
-    "storeSize": 0,
-    "latestBlock": null,
-    "metaCached": 0,
-    "metaOk": 0,
-    "metaQueue": 0
-  },
-  "stats": { "mints1m": 0, "mints5m": 0, "mints15m": 0, "collections5m": 0 },
-  "hot": [ /* 当前 window 热榜，含 icon/twitter/website/opensea */ ],
-  "hot1m": [],
-  "hot15m": [],
-  "feed": [ /* 最近 mint 流水 */ ]
-}
-```
+响应关键字段：`status`、`stats`、`hot`、`feed`、`mintedOut`、`blacklist`。
 
-### 5.3 前端要点
-
-- 无框架：原生 HTML/CSS/JS  
-- 2.5s 拉一次 `/api/mints`  
-- 时间窗按钮切换 1/5/15 分钟（用 hot1m / hot / hot15m）  
-- KPI 条：当前最热、铸造速度、独立 minter、活跃集合、新盘、最近一笔、区块  
-- 图标行：始终渲染 X / Web / OpenSea  
-
-### 5.4 本地运行
+### 5.2 本地运行
 
 ```bash
 cd <项目目录>
 npm install
-# 若需代理访问 Blockscout/OpenSea：
-# set HTTPS_PROXY=http://127.0.0.1:7897
-# set HTTP_PROXY=http://127.0.0.1:7897
+# 需要代理访问外网时（Windows Clash 等）：
+#   系统/终端已设 HTTPS_PROXY=http://127.0.0.1:7897 即可（代码会用 undici）
 npm start
-# → http://localhost:3789/mint.html
+# → http://localhost:3789/
 ```
 
-默认端口：`3789`（`process.env.PORT` 可改）。
+开发热重载：`npm run dev`（`node --watch`）。
+
+### 5.3 协作约定（本仓库）
+
+1. 功能改完 **先本地预览**，确认后再 `git push`。  
+2. 用户可见改动才写入 `UPDATES`；推送前可过一遍文案。  
+3. 日志（本 md）与站内「更新」浮层分工：本文件偏工程全貌，浮层偏用户短句。
 
 ---
 
-## 6. 产品设计结论（讨论沉淀）
+## 6. 开发时间线（摘要）
 
-### 6.1 为什么市面上类似产品少（MintFun 等）
+### 阶段 A — 原型（约 2026-07-12）
 
-- MVP 容易，**全周期运维 + 信任 + 变现 + 扛淡季** 难。  
-- 赛道潮汐强，景气一过产品难养。  
-- 护城河在心智与分发，不在「会画热榜」。
+- Blockscout 轮询 + 热榜/实时流  
+- OpenSea 元数据与社交图标  
+- 去 LP / 垃圾名  
+- SeaDrop 分账调研（文档级）
 
-### 6.2 变现方向（仅讨论，未实现）
+### 阶段 B — 产品化 UI
 
-| 路径 | 评价 |
+- 5m / 30m / 1h 列；价格筛选  
+- 亮暗色、中英、收藏、屏蔽  
+- 钱包连接  
+- maxSupply 进度条、高风险角标  
+- 已铸完面板 + 文件粘性归档  
+- 热榜列宽布局迭代（最终：集合固定 + 指标均分）
+
+### 阶段 C — 质量与上线（约 2026-07-13）
+
+- Railway 部署与健康检查加固  
+- 轮询降频（后端 5s / 前端 4s）以控 egress  
+- 铸完离热榜 + 前端已铸完少重绘  
+- 免费价展示、minted 消毒、veNFT 过滤  
+- 顶栏「更新」浮层；精简更新文案  
+- 本地 `HTTPS_PROXY` + undici 出站修复  
+- **Blockscout 状态警示**（live 绿标 / 故障红标 + 可关闭原因条；窗口数据与轮询健康诊断） 
+
+---
+
+## 7. 商业与后续方向（讨论，未实现）
+
+| 方向 | 备注 |
 |------|------|
-| 付费推广位（如 $200/天） | 最贴工具；必须与自然榜隔离并标 Sponsored |
-| 会员 | 需先有强钩子（告警等），否则随缘 |
-| 严选发行 / Launchpad | 需与雷达品牌隔离；可自营高标准项目 |
-| 官方代币 + 交易费 | 冷启动常见；市值≠公允估值；勿污染中立热榜 |
+| 推广位 Sponsored | 与自然榜隔离 |
+| 发射台 Launch | 可同站路径 `/launch`；索引适合轻量 DB；图走 IPFS |
+| AI 画 NFT | 后端代理模型 API；密钥放环境变量 |
+| 全站单 Railway | 现阶段推荐；静态页几乎不增成本 |
+| 子域名拆 Vercel | 可选；跨站跳转，非必须 |
 
-### 6.3 站内 mint（未来）
-
-- SeaDrop **`mintPublic`**：参数简单，前端可直调。  
-- Allowlist / `mintSigned`：依赖 proof/签名，难替代 OpenSea 网页。  
-- 策略建议：能直铸则直铸，否则跳 OpenSea。
-
-### 6.4 性能升级路径
-
-1. 现状：Blockscout 轮询（够原型）  
-2. 中期：Robinhood RPC + `eth_getLogs`（from=0 的 Transfer）  
-3. 进阶：websocket 订阅、mempool、多链  
-
-瓶颈排序：**数据源类型 > 索引延迟 > 轮询/限流 > 前端**。
+原则建议：**中立监控热榜** 与 **发行/广告** 叙事隔离。
 
 ---
 
-## 7. 已知限制与技术债
+## 8. 已知限制与技术债
 
-- [ ] 依赖第三方索引，漏块/延迟不可完全控  
-- [ ] 公开 API 限流；高频轮询可能被掐  
-- [ ] OpenSea 未收录集合无 logo/社交  
-- [ ] 去噪规则较粗，钓鱼盘仍可能进榜  
-- [ ] 无持久化 DB，重启丢内存缓存  
-- [ ] 无用户系统、无推广后台、无钱包  
-- [ ] 与「交叉买入监控」耦合在同一 Express 进程  
-- [ ] `ethereum-cryptography` 曾为临时算 selector 安装，非 mint 运行时必需（可清理）  
-- [ ] 未正式接入 Blockscout PRO apikey  
-
----
-
-## 8. 重建项目时的建议清单（Checklist）
-
-独立新文件夹时建议：
-
-1. **只带 Mint Radar**：`mint-radar` 后端 + `mint` 前端，去掉钱包交叉逻辑（或 submodule）。  
-2. **环境变量**：`PORT`、`HTTPS_PROXY`、`BLOCKSCOUT_BASE`、`BLOCKSCOUT_API_KEY`、`RPC_URL`。  
-3. **配置化**：黑名单、垃圾名正则、SeaDrop 地址、OpenSea chain slug。  
-4. **双源采集**：REST 保底 + RPC logs 提速。  
-5. **推广位**：独立配置/表，UI 与热榜分离。  
-6. **告警**：TG/Discord webhook（会员钩子）。  
-7. **可 mint 探测**：识别 SeaDrop public 并展示价格/是否可站内铸。  
-8. **品牌**：favicon、域名、与「发行/代币」叙事隔离说明页。
-
-### 最小文件拷贝清单（从本原型）
-
-```
-server/mint-radar.js
-server/index.js          # 需裁剪，只留 mint + static
-public/mint.html
-public/mint.css
-public/mint.js
-public/favicon.svg
-public/opensea-icon.jpg
-package.json             # express + undici
-NFT-MINT-RADAR-开发日志.md
-```
+- [ ] 依赖 Blockscout 索引延迟与限流（已加前端故障警示；未做 RPC `eth_getLogs` 备份主路径）  
+- [x] Blockscout 宕机时面板状态可见（绿 live / 红故障）  
+- [ ] OpenSea 未收录则 logo/社交缺失  
+- [ ] ve/钓鱼启发式无法 100% 覆盖  
+- [ ] 已铸完归档默认容器磁盘可能随部署丢失（需 Railway Volume 才稳）  
+- [ ] 无用户账号体系、无服务端收藏同步  
+- [ ] 未强制 Blockscout PRO apikey  
+- [ ] 非 RPC `eth_getLogs` 主路径（可升级）  
 
 ---
 
@@ -328,24 +299,29 @@ NFT-MINT-RADAR-开发日志.md
 BLOCKSCOUT = https://robinhoodchain.blockscout.com
 OPENSEA_CHAIN = robinhood
 ZERO = 0x0000000000000000000000000000000000000000
-SEADROP = 0x00005EA00Ac477B1030CE78506496e8C2dE24bf5
-OS_FEE = 0x0000a26b00c1F0DF003000390027140000fAa719
 CHAIN_ID = 4663
 DEFAULT_PORT = 3789
+POLL_MS (backend) = 5000
+REFRESH_MS (frontend) = 4000
 ```
 
-SeaDrop 常用读法（RPC eth_call）：
+环境变量（常用）：
 
-- `getCreatorPayoutAddress(address)` selector：`0x5cb3c4d3`  
-- `getPublicDrop(address)` selector：`0xbc6a629c`  
+```text
+PORT / HOST
+HTTPS_PROXY / HTTP_PROXY
+BLOCKSCOUT_BASE / BLOCKSCOUT_API_KEY
+EXPLORER_BASE / OPENSEA_CHAIN / CHAIN_ID
+DATA_DIR
+```
 
 ---
 
 ## 10. 一句话总结
 
-> 我们在 Robinhood Chain 上验证了：**用 Blockscout 索引 + 轻量 Node 聚合 + 静态前端，可以快速做出「NFT 铸造热度雷达」原型**；并补齐了 OpenSea 元数据、KPI、品牌资源。  
-> 这是 **产品与数据管线的原型验证**，不是最终形态。下一步宜独立成项目，按需升级 RPC、推广位与（可选）官方发行/代币叙事，并保持 **中立监控与商业发行分离**。
+> 在 Robinhood Chain 上，用 **Blockscout 索引 + Node 聚合 + 静态前端**，已做成可 **Railway 部署** 的 NFT 铸造雷达：热榜、实时流、已铸完归档、价格/风险/进度、收藏屏蔽、钱包与中英主题，并处理 ve 噪声与供应量误读。  
+> 当前是 **可用的垂直监控站**；发射台 / AI 等为后续扩展，建议仍同站分路由、先本地后推送。
 
 ---
 
-*文档生成于原型开发会话结束时，供后续「重新做一遍」时对照使用。*
+*文档随 2026-07-13 功能冻结点更新，覆盖截至当前仓库已交付能力。*

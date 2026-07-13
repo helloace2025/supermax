@@ -20,6 +20,11 @@
   const UPDATES = [
     {
       date: "2026-07-13",
+      zh: "Blockscout 状态警示：正常显示绿色 Blockscout live；浏览器故障时红标提醒，并说明原因（可关闭）",
+      en: "Blockscout status: green “Blockscout live” when healthy; red alert with reason when the explorer fails (dismissible)",
+    },
+    {
+      date: "2026-07-13",
       zh: "过滤投票锁仓类 NFT（veNFT 等），不再进入热榜",
       en: "Hide vote-escrow NFTs (veNFT, etc.) from the hot list",
     },
@@ -87,6 +92,44 @@
       statusWarm: "首次拉取 Blockscout…",
       statusOk: (pollRel, store, metaOk, metaCached, n) =>
         `上次轮询 ${pollRel} · mint ${store} · meta ${metaOk}/${metaCached} · poll #${n}`,
+      healthTitle: {
+        ok: "数据正常",
+        warm: "正在预热",
+        warming: "正在预热",
+        rate_limited: "Blockscout 限流",
+        poll_error: "Blockscout 故障",
+        poller_stale: "Blockscout 无响应",
+        poll_slow: "Blockscout 偏慢",
+        empty_store: "无铸造缓存",
+        data_stale: "数据长时间未更新",
+      },
+      /** Healthy pill — always English product copy */
+      healthChipLive: "Blockscout live",
+      healthChipLiveTitle: "区块浏览器运行正常（5/10 分钟窗口有数据）",
+      healthChip: {
+        poll_error: "Blockscout 故障",
+        poller_stale: "Blockscout 无响应",
+        rate_limited: "Blockscout 限流",
+        poll_slow: "Blockscout 偏慢",
+        empty_store: "数据异常",
+        data_stale: "数据过期",
+      },
+      healthHint: {
+        poll_error:
+          "区块浏览器 API 异常，面板暂时无法拉取新 mint。链本身可能仍正常。",
+        poller_stale:
+          "长时间连不上 Blockscout，铸造热榜/实时流已暂停更新。",
+        rate_limited: "Blockscout 触发限流，正在自动退避重试。",
+        poll_slow: "Blockscout 响应偏慢，数据可能短暂滞后。",
+        data_stale:
+          "长时间读不到 5 分钟/30 分钟窗口数据，且最近 mint 已超过 20～30 分钟未更新，判定为故障。",
+        empty_store: "mint 缓存为空，读不到 5/30 分钟窗口数据。",
+        warming: "正在首次连接 Blockscout…",
+      },
+      healthLink: "打开 Blockscout 检查 ↗",
+      healthDismiss: "关闭提示",
+      healthMeta: (newestRel, pollRel, store, fails) =>
+        `最新 mint ${newestRel || "—"} · 上次成功轮询 ${pollRel || "—"} · 缓存 ${store ?? "—"} · 连续失败 ${fails ?? 0}`,
       socialOff: (title) => `${title}（未检测到）`,
       minter: "minter",
       explorer: "Explorer",
@@ -157,6 +200,43 @@
       statusWarm: "First Blockscout fetch…",
       statusOk: (pollRel, store, metaOk, metaCached, n) =>
         `Last poll ${pollRel} · mint ${store} · meta ${metaOk}/${metaCached} · poll #${n}`,
+      healthTitle: {
+        ok: "Healthy",
+        warm: "Warming up",
+        warming: "Warming up",
+        rate_limited: "Blockscout rate limit",
+        poll_error: "Blockscout outage",
+        poller_stale: "Blockscout unreachable",
+        poll_slow: "Blockscout slow",
+        empty_store: "Empty mint store",
+        data_stale: "Data stale",
+      },
+      healthChipLive: "Blockscout live",
+      healthChipLiveTitle: "Block explorer healthy (5m/10m windows have data)",
+      healthChip: {
+        poll_error: "Blockscout down",
+        poller_stale: "Blockscout down",
+        rate_limited: "Rate limited",
+        poll_slow: "Blockscout slow",
+        empty_store: "Data issue",
+        data_stale: "Data stale",
+      },
+      healthHint: {
+        poll_error:
+          "Blockscout API is failing — the panel cannot ingest new mints. The chain itself may still be fine.",
+        poller_stale:
+          "No successful Blockscout poll for a while — leaderboard/feed updates are paused.",
+        rate_limited: "Blockscout rate-limited us; backing off automatically.",
+        poll_slow: "Blockscout is slower than usual; data may lag briefly.",
+        data_stale:
+          "No 5m/30m window data for a long time, and the newest mint is over 20–30 minutes old — treating as a data fault.",
+        empty_store: "Mint store empty — cannot read 5m/30m windows.",
+        warming: "Connecting to Blockscout for the first time…",
+      },
+      healthLink: "Open Blockscout ↗",
+      healthDismiss: "Dismiss",
+      healthMeta: (newestRel, pollRel, store, fails) =>
+        `Newest mint ${newestRel || "—"} · last OK poll ${pollRel || "—"} · store ${store ?? "—"} · fails ${fails ?? 0}`,
       socialOff: (title) => `${title} (not found)`,
       minter: "minter",
       explorer: "Explorer",
@@ -265,7 +345,38 @@
     favoritesList: $("favoritesList"),
     favoritesEmpty: $("favoritesEmpty"),
     btnClearFavorites: $("btnClearFavorites"),
+    dataHealthBanner: $("dataHealthBanner"),
+    dataHealthTitle: $("dataHealthTitle"),
+    dataHealthDetail: $("dataHealthDetail"),
+    dataHealthDismiss: $("dataHealthDismiss"),
+    dataHealthLink: $("dataHealthLink"),
+    blockscoutStatusChip: $("blockscoutStatusChip"),
   };
+
+  /** User dismissed the current health code — re-show if code changes */
+  let healthDismissedCode = null;
+
+  /**
+   * Real faults only → red chip + banner.
+   * poll_slow is warn-ish and must NOT force red error UI.
+   * data_stale only when server marks level=error (long empty windows).
+   */
+  const BLOCKSCOUT_FAULT_CODES = new Set([
+    "poll_error",
+    "poller_stale",
+    "rate_limited",
+    "empty_store",
+    "data_stale",
+  ]);
+
+  function isBlockscoutFault(code, level) {
+    if (!code || code === "ok" || code === "warming" || code === "warm") {
+      return false;
+    }
+    // Never treat healthy / non-error levels as fault
+    if (level && level !== "error") return false;
+    return BLOCKSCOUT_FAULT_CODES.has(code);
+  }
 
   /** Injected wallet (MetaMask etc.) — UI only for now, no trades */
   const RH_CHAIN_HEX = "0x1237"; // 4663
@@ -1397,6 +1508,129 @@
         st.pollCount
       );
     }
+
+    renderDataHealth(st);
+  }
+
+  /** Hide fault banner only (green/red chip is handled separately). */
+  function hideFaultBanner() {
+    const banner = els.dataHealthBanner;
+    if (banner) {
+      banner.hidden = true;
+      banner.removeAttribute("data-level");
+      banner.removeAttribute("data-code");
+    }
+    if (els.dataHealthLink) els.dataHealthLink.hidden = true;
+    if (els.dataHealthTitle) els.dataHealthTitle.textContent = "";
+    if (els.dataHealthDetail) els.dataHealthDetail.textContent = "";
+  }
+
+  /**
+   * Header status pill:
+   *  - Healthy → green "Blockscout live" (always on when pipeline OK)
+   *  - Fault   → red fault label + dismissible detail banner
+   * Warming / no status yet → hide pill (avoid false green before first poll)
+   */
+  function renderDataHealth(st) {
+    const banner = els.dataHealthBanner;
+    const chip = els.blockscoutStatusChip;
+    const h = st?.health || null;
+    const code = h?.code || "ok";
+    const level = h?.level || "ok";
+    // Real error only — never force-demo; ok/warn stay green live or quiet
+    const isFault = !!(h && isBlockscoutFault(code, level));
+    const isWarming = !h || code === "warming" || code === "warm";
+
+    // —— Status chip ——
+    if (chip) {
+      if (isWarming && !isFault) {
+        chip.hidden = true;
+        chip.removeAttribute("data-level");
+        chip.textContent = "";
+        chip.removeAttribute("title");
+      } else if (isFault) {
+        const chips = t("healthChip") || {};
+        const titles = t("healthTitle") || {};
+        const chipLabel =
+          (typeof chips === "object" && chips[code]) ||
+          (typeof titles === "object" && titles[code]) ||
+          "Blockscout 故障";
+        const detailReason =
+          (lang === "zh" ? h.reasonZh || h.reason : h.reason || h.reasonZh) ||
+          chipLabel;
+        chip.textContent = chipLabel;
+        chip.dataset.level = "error";
+        chip.title = detailReason;
+        chip.hidden = false;
+      } else {
+        // ok / mint_quiet / no_recent_mints — explorer is fine
+        healthDismissedCode = null;
+        chip.textContent = t("healthChipLive");
+        chip.dataset.level = "live";
+        chip.title = t("healthChipLiveTitle");
+        chip.hidden = false;
+      }
+    }
+
+    // —— Detail banner: faults only, dismissible ——
+    if (!banner) return;
+
+    if (!isFault) {
+      hideFaultBanner();
+      return;
+    }
+
+    if (healthDismissedCode === code) {
+      banner.hidden = true;
+      return;
+    }
+
+    const chips = t("healthChip") || {};
+    const titles = t("healthTitle") || {};
+    const title =
+      (typeof chips === "object" && chips[code]) ||
+      (typeof titles === "object" && titles[code]) ||
+      code;
+    const detailReason =
+      (lang === "zh" ? h.reasonZh || h.reason : h.reason || h.reasonZh) || title;
+    const hints = t("healthHint") || {};
+    const hint =
+      (typeof hints === "object" && hints[code]) || detailReason || "";
+
+    const newestRel = h.newestEventAt
+      ? relTime(h.newestEventAt)
+      : h.newestEventAgeMs != null
+        ? relTime(new Date(Date.now() - h.newestEventAgeMs).toISOString())
+        : null;
+    const pollRel = st.lastPollOkAt
+      ? relTime(st.lastPollOkAt)
+      : st.lastPollAt
+        ? relTime(st.lastPollAt)
+        : null;
+    const meta = t(
+      "healthMeta",
+      newestRel,
+      pollRel,
+      st.storeSize ?? h.storeSize,
+      st.consecutivePollFailures ?? h.consecutivePollFailures ?? 0
+    );
+
+    if (els.dataHealthTitle) els.dataHealthTitle.textContent = `⚠ ${title}`;
+    if (els.dataHealthDetail) {
+      els.dataHealthDetail.textContent = hint ? `${hint} · ${meta}` : meta;
+    }
+    if (els.dataHealthLink) {
+      els.dataHealthLink.hidden = false;
+      els.dataHealthLink.textContent = t("healthLink");
+    }
+    if (els.dataHealthDismiss) {
+      els.dataHealthDismiss.title = t("healthDismiss");
+      els.dataHealthDismiss.setAttribute("aria-label", t("healthDismiss"));
+    }
+
+    banner.dataset.level = "error";
+    banner.dataset.code = code;
+    banner.hidden = false;
   }
 
   function renderAll(data, { forceMintedOut = false } = {}) {
@@ -1637,6 +1871,21 @@
       renderAll(data, { forceMintedOut: false });
     } catch (e) {
       els.statusLine.textContent = e.message || String(e);
+      // Only surface fault UI when our own API request fails (real outage)
+      if (els.dataHealthBanner || els.blockscoutStatusChip) {
+        renderDataHealth({
+          health: {
+            level: "error",
+            code: "poll_error",
+            reason: e.message || String(e),
+            reasonZh: e.message || String(e),
+            consecutivePollFailures: 1,
+            storeSize: 0,
+          },
+          consecutivePollFailures: 1,
+          storeSize: 0,
+        });
+      }
     }
   }
 
@@ -1655,6 +1904,14 @@
   syncWalletBtn();
 
   els.btnRefresh.addEventListener("click", () => refresh());
+
+  if (els.dataHealthDismiss) {
+    els.dataHealthDismiss.addEventListener("click", () => {
+      const code = els.dataHealthBanner?.dataset?.code || "ok";
+      healthDismissedCode = code;
+      if (els.dataHealthBanner) els.dataHealthBanner.hidden = true;
+    });
+  }
   syncPriceFilterUi();
   closePriceFilterMenu();
   window.addEventListener("resize", positionPriceFilterMenu);

@@ -18,7 +18,7 @@
         }
       })();
     </script>
-    <link rel="stylesheet" href="/mint.css?v=40" />
+    <link rel="stylesheet" href="/mint.css?v=44" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -40,6 +40,13 @@
             <a id="explorerLink" href="https://robinhoodchain.blockscout.com/" target="_blank" rel="noopener"
               >Blockscout ↗</a
             >
+            <span
+              id="blockscoutStatusChip"
+              class="blockscout-status-chip"
+              hidden
+              role="status"
+              title=""
+            ></span>
           </p>
         </div>
       </div>
@@ -103,6 +110,43 @@
         <button type="button" class="btn" id="btnRefresh" data-i18n="refresh">立即刷新</button>
       </div>
     </section>
+
+    <!-- Blockscout / pipeline alert — shown when explorer poll fails or data stalls -->
+    <div
+      id="dataHealthBanner"
+      class="data-health-banner"
+      hidden
+      role="alert"
+      aria-live="assertive"
+    >
+      <div class="data-health-inner">
+        <span class="data-health-icon" aria-hidden="true">
+          <span class="data-health-siren"></span>
+        </span>
+        <div class="data-health-text">
+          <strong id="dataHealthTitle" class="data-health-title"></strong>
+          <span id="dataHealthDetail" class="data-health-detail"></span>
+          <a
+            id="dataHealthLink"
+            class="data-health-link"
+            href="https://robinhoodchain.blockscout.com/"
+            target="_blank"
+            rel="noopener noreferrer"
+            hidden
+            >Open Blockscout ↗</a
+          >
+        </div>
+        <button
+          type="button"
+          class="data-health-dismiss"
+          id="dataHealthDismiss"
+          aria-label="Dismiss"
+          title="Dismiss"
+        >
+          ×
+        </button>
+      </div>
+    </div>
 
     <main class="layout">
       <section class="panel hot-panel">
@@ -232,6 +276,6 @@
       <ul class="updates-list" id="updatesList"></ul>
     </div>
 
-    <script src="/mint.js?v=43"></script>
+    <script src="/mint.js?v=50"></script>
   </body>
 </html>

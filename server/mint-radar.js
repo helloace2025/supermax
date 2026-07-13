@@ -148,13 +148,34 @@ let metaBusy = false;
 let polling = false;
 let pollTimer = null;
 let lastPollAt = null;
+/** Last successful poll that returned HTTP 200 (may add 0 new mints) */
+let lastPollOkAt = null;
+/** Last time ingestItems actually added ≥1 mint */
+let lastIngestAt = null;
+/** Mints added in the most recent successful poll */
+let lastPollAdded = 0;
+/** Consecutive failed pollOnce attempts */
+let consecutivePollFailures = 0;
 let lastError = null;
 let pollCount = 0;
 let latestBlock = null;
+/** Throttle repeated stale warnings in logs */
+let lastStaleLogAt = 0;
 
 const META_OK_TTL_MS = 30 * 60 * 1000;
 const META_MISS_TTL_MS = 5 * 60 * 1000;
 const META_GAP_MS = 350;
+
+/** Health thresholds (ms) */
+const POLL_STALE_MS = 90_000; // no successful poll for this long → poller problem
+const POLL_WARN_MS = 45_000;
+/** If any mint lands in 5m or 10m window → treat as healthy (never fault UI) */
+const HEALTH_RECENT_5M_MS = 5 * 60_000;
+const HEALTH_RECENT_10M_MS = 10 * 60_000;
+/** No 5m/30m activity + newest mint older than this → data fault */
+const HEALTH_STALE_FAULT_MS = 20 * 60_000;
+const HEALTH_STALE_HARD_MS = 30 * 60_000;
+const MINT_30M_MS = 30 * 60_000;
 
 function short(addr) {
   if (!addr || addr.length < 10) return addr || "—";
@@ -1066,7 +1087,17 @@ async function fetchJson(url) {
           `[mint-radar] Blockscout 429 — pause ${RATE_LIMIT_BACKOFF_MS}ms`
         );
       }
-      throw new Error(`HTTP ${res.status}: ${text.slice(0, 120)}`);
+      // Collapse HTML error pages (nginx 502/503) into a short readable reason
+      const plain = String(text || "")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 100);
+      throw new Error(
+        plain
+          ? `HTTP ${res.status}: ${plain}`
+          : `HTTP ${res.status}`
+      );
     }
     return await res.json();
   } finally {
@@ -1100,10 +1131,15 @@ async function pollOnce() {
           qs.set("transaction_types", "ERC-721");
           url = `${BLOCKSCOUT}/api/v2/advanced-filters?${qs.toString()}`;
         }
-        lastPollAt = new Date().toISOString();
+        const nowIso = new Date().toISOString();
+        lastPollAt = nowIso;
+        lastPollOkAt = nowIso;
+        lastPollAdded = totalAdded;
         lastError = null;
+        consecutivePollFailures = 0;
         pollCount += 1;
         if (totalAdded > 0) {
+          lastIngestAt = nowIso;
           console.log(`[mint-radar] +${totalAdded} mints (store=${eventMap.size})`);
         }
         lastErr = null;
@@ -1115,7 +1151,11 @@ async function pollOnce() {
     }
     if (lastErr) {
       lastError = lastErr.message || String(lastErr);
-      console.error("[mint-radar] poll failed:", lastError);
+      consecutivePollFailures += 1;
+      console.error(
+        `[mint-radar] poll failed (x${consecutivePollFailures}):`,
+        lastError
+      );
     } else {
       // Archive any newly sold-out collections after a successful poll
       harvestMintedOut();
@@ -1123,10 +1163,183 @@ async function pollOnce() {
   } catch (e) {
     // Never let poll crash the process (Railway marks CRASHED on unhandled rejections)
     lastError = e?.message || String(e);
+    consecutivePollFailures += 1;
     console.error("[mint-radar] pollOnce fatal (swallowed):", lastError);
   } finally {
     polling = false;
   }
+}
+
+/** Newest mint event timestamp in the in-memory store (ms), or null. */
+function newestEventTs() {
+  let max = null;
+  for (const e of allEvents()) {
+    if (e?.ts == null || !Number.isFinite(e.ts)) continue;
+    max = max == null ? e.ts : Math.max(max, e.ts);
+  }
+  return max;
+}
+
+/** Count mint events in the last `windowMs` (from now). */
+function countMintsInWindow(windowMs, now = Date.now()) {
+  const from = now - windowMs;
+  let n = 0;
+  for (const e of allEvents()) {
+    if (e?.ts != null && e.ts >= from) n += 1;
+  }
+  return n;
+}
+
+/**
+ * Classify pipeline health for the UI status chip + fault banner.
+ *
+ * Rules (product):
+ * 1) If 5m or 10m windows have mint data → healthy (never fault).
+ * 2) If 5m & 30m are empty AND newest mint is ≥20–30m old → fault
+ *    (stale windows / explorer lag / poll broken).
+ * Hard poll failures still fault when there is no recent window data.
+ */
+function computeHealth() {
+  const now = Date.now();
+  const rateLimited = rateLimitUntil > now;
+  const rateLimitRemainMs = rateLimited ? rateLimitUntil - now : 0;
+  const pollOkAgeMs = lastPollOkAt
+    ? now - new Date(lastPollOkAt).getTime()
+    : null;
+  const pollAgeMs = lastPollAt ? now - new Date(lastPollAt).getTime() : null;
+  const newestTs = newestEventTs();
+  const newestEventAgeMs = newestTs != null ? Math.max(0, now - newestTs) : null;
+  const ingestAgeMs = lastIngestAt
+    ? now - new Date(lastIngestAt).getTime()
+    : null;
+
+  const mints5m = countMintsInWindow(HEALTH_RECENT_5M_MS, now);
+  const mints10m = countMintsInWindow(HEALTH_RECENT_10M_MS, now);
+  const mints30m = countMintsInWindow(MINT_30M_MS, now);
+
+  /** Recent short windows have data → product rule: not a fault */
+  const hasRecentWindowData =
+    mints5m > 0 ||
+    mints10m > 0 ||
+    (newestEventAgeMs != null && newestEventAgeMs < HEALTH_RECENT_10M_MS);
+
+  /**
+   * Long gap: no 5m / 30m counts and latest mint older than threshold
+   * (or store completely empty after we already warmed up)
+   */
+  const windowsEmpty = mints5m === 0 && mints30m === 0;
+  const newestTooOld =
+    newestEventAgeMs == null || newestEventAgeMs >= HEALTH_STALE_FAULT_MS;
+  const newestVeryOld =
+    newestEventAgeMs == null || newestEventAgeMs >= HEALTH_STALE_HARD_MS;
+  const dataStaleFault = windowsEmpty && newestTooOld && lastPollOkAt != null;
+
+  /** @type {"ok"|"warn"|"error"|"warm"} */
+  let level = "ok";
+  /** @type {string} */
+  let code = "ok";
+  /** @type {string} */
+  let reason = "Data pipeline healthy — 5m/10m windows have recent mints or feed is fresh";
+  /** @type {string} */
+  let reasonZh = "数据管道正常 — 5 分钟/10 分钟窗口有数据或最新 mint 较新";
+
+  if (!lastPollOkAt && !lastError && consecutivePollFailures === 0) {
+    level = "warm";
+    code = "warming";
+    reason = "First Blockscout fetch in progress…";
+    reasonZh = "首次拉取 Blockscout…";
+  } else if (hasRecentWindowData) {
+    // Rule 1: can read 5m / 10m data → never report fault
+    level = "ok";
+    code = "ok";
+    reason = `Healthy: mints5m=${mints5m}, mints10m=${mints10m}`;
+    reasonZh = `正常：5 分钟 ${mints5m} 笔 · 10 分钟 ${mints10m} 笔铸造`;
+  } else if (rateLimited && consecutivePollFailures > 0 && !hasRecentWindowData) {
+    level = "error";
+    code = "rate_limited";
+    reason = `Blockscout rate-limited (HTTP 429). Backing off ~${Math.ceil(rateLimitRemainMs / 1000)}s. No recent 5m/10m mints.`;
+    reasonZh = `Blockscout 限流 (HTTP 429)，约 ${Math.ceil(rateLimitRemainMs / 1000)}s 后重试。5/10 分钟窗口无数据。`;
+  } else if (
+    lastError &&
+    !hasRecentWindowData &&
+    (consecutivePollFailures >= 1 ||
+      pollOkAgeMs == null ||
+      pollOkAgeMs > POLL_WARN_MS)
+  ) {
+    level = "error";
+    code = "poll_error";
+    reason = `Blockscout poll failing: ${lastError}`;
+    reasonZh = `Blockscout 轮询失败：${lastError}`;
+  } else if (pollOkAgeMs != null && pollOkAgeMs > POLL_STALE_MS && !hasRecentWindowData) {
+    level = "error";
+    code = "poller_stale";
+    reason = `No successful poll for ${Math.round(pollOkAgeMs / 1000)}s — process may be stuck.`;
+    reasonZh = `已 ${Math.round(pollOkAgeMs / 1000)}s 无成功轮询，进程可能卡住。`;
+  } else if (eventMap.size === 0 && lastPollOkAt) {
+    level = "error";
+    code = "empty_store";
+    reason = "Mint store empty — cannot read 5m/30m windows.";
+    reasonZh = "mint 缓存为空，读不到 5 分钟/30 分钟窗口数据。";
+  } else if (dataStaleFault) {
+    // Rule 2: long time without 5m/30m data + newest mint ≥20m (hard at 30m)
+    level = "error";
+    code = "data_stale";
+    const mins =
+      newestEventAgeMs != null ? Math.round(newestEventAgeMs / 60_000) : null;
+    reason = newestVeryOld
+      ? `No 5m/30m mint data; newest mint ${mins != null ? `~${mins}m` : "unknown"} ago (≥30m). Treat as Blockscout/data fault.`
+      : `No 5m/30m mint data; newest mint ${mins != null ? `~${mins}m` : "unknown"} ago (≥20m). Treat as data fault.`;
+    reasonZh = newestVeryOld
+      ? `长时间读不到 5 分钟/30 分钟数据；最新 mint 约 ${mins != null ? mins : "?"} 分钟前（≥30 分钟），判定为数据故障。`
+      : `长时间读不到 5 分钟/30 分钟数据；最新 mint 约 ${mins != null ? mins : "?"} 分钟前（≥20 分钟），判定为数据故障。`;
+  } else if (pollOkAgeMs != null && pollOkAgeMs > POLL_WARN_MS && !hasRecentWindowData) {
+    level = "warn";
+    code = "poll_slow";
+    reason = `Last successful poll ${Math.round(pollOkAgeMs / 1000)}s ago; short windows empty.`;
+    reasonZh = `上次成功轮询在 ${Math.round(pollOkAgeMs / 1000)}s 前；短窗口暂无数据。`;
+  } else {
+    // Between 10m and 20m gap: still live (not fault yet)
+    level = "ok";
+    code = "ok";
+    const mins =
+      newestEventAgeMs != null ? Math.round(newestEventAgeMs / 60_000) : null;
+    reason = `OK (short quiet): newest ~${mins ?? "?"}m, mints5m=${mints5m}, mints30m=${mints30m}`;
+    reasonZh = `正常（短暂变冷）：最新约 ${mins ?? "?"} 分钟 · 5 分钟 ${mints5m} · 30 分钟 ${mints30m}`;
+  }
+
+  // Server-side log when fault (throttled)
+  if (level === "error") {
+    if (now - lastStaleLogAt > 5 * 60_000) {
+      lastStaleLogAt = now;
+      console.warn(
+        `[mint-radar] health ${level}/${code}: ${reason} | 5m=${mints5m} 10m=${mints10m} 30m=${mints30m} store=${eventMap.size} poll#=${pollCount} failx=${consecutivePollFailures}`
+      );
+    }
+  }
+
+  return {
+    level,
+    code,
+    reason,
+    reasonZh,
+    pollAgeMs,
+    pollOkAgeMs,
+    newestEventAt:
+      newestTs != null ? new Date(newestTs).toISOString() : null,
+    newestEventAgeMs,
+    lastIngestAt,
+    ingestAgeMs,
+    lastPollAdded,
+    consecutivePollFailures,
+    rateLimited,
+    rateLimitRemainMs,
+    storeSize: eventMap.size,
+    mints5m,
+    mints10m,
+    mints30m,
+    hasRecentWindowData,
+    windowsEmpty,
+  };
 }
 
 /** Fire-and-forget poll that never becomes an unhandled rejection */
@@ -1484,9 +1697,11 @@ export function getMintSnapshot(opts = {}) {
     });
 
   const now = Date.now();
-  const mints1m = allEvents().filter((e) => e.ts >= now - 60_000).length;
-  const mints5m = allEvents().filter((e) => e.ts >= now - 5 * 60_000).length;
-  const mints15m = allEvents().filter((e) => e.ts >= now - 15 * 60_000).length;
+  const mints1m = countMintsInWindow(60_000, now);
+  const mints5m = countMintsInWindow(5 * 60_000, now);
+  const mints10m = countMintsInWindow(10 * 60_000, now);
+  const mints15m = countMintsInWindow(15 * 60_000, now);
+  const mints30m = countMintsInWindow(30 * 60_000, now);
   const collections5m = new Set(
     allEvents()
       .filter((e) => e.ts >= now - 5 * 60_000)
@@ -1508,7 +1723,11 @@ export function getMintSnapshot(opts = {}) {
     },
     status: {
       lastPollAt,
+      lastPollOkAt,
+      lastIngestAt,
+      lastPollAdded,
       lastError,
+      consecutivePollFailures,
       pollCount,
       polling,
       storeSize: eventMap.size,
@@ -1522,11 +1741,17 @@ export function getMintSnapshot(opts = {}) {
       priceOk: txPriceResolvedOk,
       priceErr: txPriceResolvedErr,
       priceKnownEvents,
+      rateLimited: rateLimitUntil > Date.now(),
+      rateLimitRemainMs: Math.max(0, rateLimitUntil - Date.now()),
+      /** Structured diagnosis for UI alert banner */
+      health: computeHealth(),
     },
     stats: {
       mints1m,
       mints5m,
+      mints10m,
       mints15m,
+      mints30m,
       collections5m,
       windowMin,
     },
