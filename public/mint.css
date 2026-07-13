@@ -541,7 +541,8 @@ html[data-theme="light"] .wallet-btn.is-connected {
 table {
   width: 100%;
   border-collapse: collapse;
-  table-layout: fixed;
+  /* auto + width:1% metrics = content-sized cols; leftover only in 集合 */
+  table-layout: auto;
   font-size: 0.86rem;
   font-family: var(--ui);
 }
@@ -557,55 +558,47 @@ td {
 }
 
 /*
- * Hot leaderboard packing:
- * - 集合 is the ONLY flexible column (width:100% eats all leftover)
- * - metric cols use width:0 + nowrap → shrink to content, no dead air
- * - result: 5m…已铸造…最近 sit as a tight group on the right
+ * Hot table packing (content-sized metrics, no dead gap before 最近):
+ * width:1% + nowrap → column shrinks to header/cell content;
+ * 集合 has no 1% so it absorbs leftover width only.
  */
-.hot-panel col.c-rank {
-  width: 2.25rem;
-}
-.hot-panel col.c-name {
-  width: 100%;
-}
+.hot-panel col.c-rank,
 .hot-panel col.c-m5,
 .hot-panel col.c-m30,
-.hot-panel col.c-m1h {
-  width: 0;
-}
-.hot-panel col.c-price {
-  width: 0;
-}
+.hot-panel col.c-m1h,
+.hot-panel col.c-price,
 .hot-panel col.c-holders,
-.hot-panel col.c-minted {
-  width: 0;
-}
+.hot-panel col.c-minted,
 .hot-panel col.c-recent {
-  width: 0;
+  width: 1%;
+}
+.hot-panel col.c-name {
+  width: auto;
 }
 
 .hot-panel thead th:nth-child(1),
 .hot-panel tbody td:nth-child(1) {
+  width: 1%;
   padding-left: 14px;
   padding-right: 6px;
-  width: 2.25rem;
 }
 
 .hot-panel thead th:nth-child(2),
 .hot-panel tbody td:nth-child(2) {
+  width: auto;
+  min-width: 11rem;
   padding-left: 6px;
-  padding-right: 14px;
-  width: 100%;
+  padding-right: 12px;
   overflow: hidden;
 }
 
-/* Metric cluster: content-sized, right-aligned, tight horizontal rhythm */
 .hot-panel thead th:nth-child(n + 3),
 .hot-panel tbody td:nth-child(n + 3) {
-  width: 0;
+  width: 1%;
   padding-left: 8px;
   padding-right: 8px;
   text-align: right;
+  white-space: nowrap;
 }
 
 .hot-panel thead th:nth-child(9),
