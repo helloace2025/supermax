@@ -827,6 +827,48 @@ function attachMetaFields(row) {
   };
 }
 
+/**
+ * Blockscout `token.total_supply` is *usually* ERC-721 minted count, but often NOT:
+ * - veNFT / vote-escrow: totalSupply = locked amount or voting power (hundreds of millions)
+ * - ERC-20 mistaken as NFT stream
+ * - raw wei-scale integers
+ * OpenSea "16 items" vs UI "437,507,642" is exactly this class of bug.
+ */
+const MAX_PLAUSIBLE_NFT_MINTED = 2_000_000; // hobby / RH-chain collections stay far below this
+
+function sanitizeNftMintedCount(raw, holders) {
+  if (raw == null || raw === "") return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+
+  // Decimal amounts are almost never "how many NFTs"
+  if (/[eE.]/.test(s) && !/^\d+$/.test(s)) {
+    const f = Number(s);
+    if (!Number.isFinite(f) || f < 0 || f > MAX_PLAUSIBLE_NFT_MINTED) return null;
+    return Math.floor(f);
+  }
+
+  // >10 digits → not a collection size (e.g. 437507642 is 9 digits but still absurd)
+  if (/^\d+$/.test(s) && s.length >= 10) return null;
+
+  const n = Number(s);
+  if (!Number.isFinite(n) || n < 0) return null;
+  if (n > MAX_PLAUSIBLE_NFT_MINTED) return null;
+
+  // e.g. 437M minted / 11 holders → totalSupply is not NFT count
+  const h = holders != null ? Number(holders) : null;
+  if (
+    Number.isFinite(h) &&
+    h > 0 &&
+    n >= 10_000 &&
+    n / h > 5_000
+  ) {
+    return null;
+  }
+
+  return Math.floor(n);
+}
+
 function normalizeMint(item) {
   const contract = String(item.token?.address_hash || "").toLowerCase();
   const minter = String(item.to?.hash || "").toLowerCase();
@@ -844,6 +886,11 @@ function normalizeMint(item) {
   const valueFromCache = cached?.valueWei != null ? toWei(cached.valueWei) : null;
   const txValueWei = valueFromCache ?? hintValue;
 
+  const holders =
+    item.token?.holders_count != null ? Number(item.token.holders_count) : null;
+  // Prefer real NFT count; drop ve-power / ERC-20 style total_supply garbage
+  const minted = sanitizeNftMintedCount(item.token?.total_supply, holders);
+
   return {
     key: eventKey(item),
     txHash,
@@ -855,13 +902,11 @@ function normalizeMint(item) {
     contract,
     name: item.token?.name || "Unknown",
     symbol: item.token?.symbol || "?",
-    holders: item.token?.holders_count != null ? Number(item.token.holders_count) : null,
-    // Blockscout token.total_supply for ERC-721 ≈ already minted count (not maxSupply)
-    minted:
-      item.token?.total_supply != null ? Number(item.token.total_supply) : null,
+    holders: Number.isFinite(holders) ? holders : null,
+    // Sanitized: ERC-721 minted count when trustworthy; else null (UI shows —)
+    minted,
     /** @deprecated use minted — kept for older clients */
-    totalSupply:
-      item.token?.total_supply != null ? Number(item.token.total_supply) : null,
+    totalSupply: minted,
     minter,
     minterShort: short(minter),
     icon: streamIcon || getMeta(contract).icon || null,
@@ -1113,8 +1158,19 @@ function aggregate(windowMs) {
       row.name = e.name || row.name;
       row.symbol = e.symbol || row.symbol;
       if (e.holders != null) row.holders = e.holders;
-      const m = e.minted ?? e.totalSupply;
-      if (m != null) {
+      // Newest event wins — including null after sanitize (clears veNFT garbage)
+      const m = sanitizeNftMintedCount(
+        e.minted ?? e.totalSupply,
+        e.holders ?? row.holders
+      );
+      row.minted = m;
+      row.totalSupply = m;
+    } else {
+      const m = sanitizeNftMintedCount(
+        e.minted ?? e.totalSupply,
+        e.holders ?? row.holders
+      );
+      if (row.minted == null && m != null) {
         row.minted = m;
         row.totalSupply = m;
       }
@@ -1135,14 +1191,19 @@ function aggregate(windowMs) {
       r.priceRefWei != null ? r.priceRefWei.toString() : null;
     const priceEth = weiToEthString(r.priceRefWei);
     const priceDisplay = formatPriceLabel(r.priceRefWei);
+    // Final guard: drop absurd minted left over from older process versions
+    const mintedSafe = sanitizeNftMintedCount(
+      r.minted ?? r.totalSupply,
+      r.holders
+    );
 
     return attachMetaFields({
       contract: r.contract,
       name: r.name,
       symbol: r.symbol,
       holders: r.holders,
-      minted: r.minted ?? r.totalSupply,
-      totalSupply: r.minted ?? r.totalSupply,
+      minted: mintedSafe,
+      totalSupply: mintedSafe,
       mints: r.mints,
       uniqueMinters,
       topMethod,
