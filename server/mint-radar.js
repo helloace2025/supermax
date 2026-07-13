@@ -153,13 +153,16 @@ function weiToEthString(wei) {
   return neg ? `-${s}` : s;
 }
 
-/** Single reference price only (no ranges). 0 → Free. */
+/** Single reference price only (no ranges). 0 / dust-rounds-to-0 → Free. */
 function formatPriceLabel(wei) {
   if (wei == null) return null;
   const w = typeof wei === "bigint" ? wei : toWei(wei);
   if (w == null) return null;
   if (w === 0n) return "Free";
-  return `${weiToEthString(w)} ETH`;
+  const eth = weiToEthString(w);
+  // Sub-display-precision wei (e.g. 1 wei) stringifies as "0" — treat as Free
+  if (eth == null || eth === "0" || eth === "-0") return "Free";
+  return `${eth} ETH`;
 }
 
 /** How many ERC-721 mint events we already stored for this tx hash. */

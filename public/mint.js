@@ -1016,16 +1016,37 @@
       });
   }
 
+  /** True for 0 / 0.0 / "0 ETH" / Free — same notion as priceCategory free. */
+  function isFreePriceText(s) {
+    const t0 = String(s ?? "")
+      .trim()
+      .toLowerCase();
+    if (!t0) return false;
+    if (/\bfree\b|免费/.test(t0)) return true;
+    // "0", "0.0", "0 ETH", "0.000 eth"
+    if (/^0+(\.0+)?(\s*eth)?$/.test(t0)) return true;
+    return false;
+  }
+
+  function isZeroEthAmount(eth) {
+    if (eth == null || eth === "") return false;
+    if (eth === 0 || eth === "0") return true;
+    const n = Number(eth);
+    return Number.isFinite(n) && n === 0;
+  }
+
   /** Single reference price only — Free or one ETH amount (no ranges). */
   function formatPriceCell(r) {
-    if (r.priceDisplay) {
-      let s = String(r.priceDisplay);
+    if (r.priceDisplay != null && String(r.priceDisplay).trim() !== "") {
+      let s = String(r.priceDisplay).trim();
+      // Backend may send "0 ETH" for free/dust; never show that in the UI
+      if (isFreePriceText(s)) return t("priceFree");
       if (lang === "zh") s = s.replace(/\bFree\b/g, t("priceFree"));
       return s;
     }
     const eth = r.priceEth ?? r.priceMinEth ?? r.priceLastEth;
-    if (eth == null) return t("pricePending");
-    if (eth === "0") return t("priceFree");
+    if (eth == null || eth === "") return t("pricePending");
+    if (isZeroEthAmount(eth)) return t("priceFree");
     return `${eth} ETH`;
   }
 
