@@ -557,21 +557,23 @@ td {
 }
 
 /*
- * Hot table: do NOT stretch 集合 to fill the panel (that shoved 5分钟 far right).
- * Table sizes to content and stays left-aligned; spare panel space sits after 最近.
+ * Hot table layout (fills panel width cleanly):
+ * - # + 集合: fixed left band
+ * - 5分钟 → 最近: share ALL remaining width equally (the red-box zone)
+ *   so columns are evenly spaced and flush to the panel’s right edge
  */
 .hot-panel table {
-  width: max-content;
-  max-width: 100%;
-  table-layout: auto;
+  width: 100%;
+  table-layout: fixed;
 }
 
 .hot-panel col.c-rank {
   width: 2.25rem;
 }
 .hot-panel col.c-name {
-  width: 15.5rem;
+  width: 15.25rem;
 }
+/* 7 metric cols: no explicit width → fixed-layout splits leftover evenly */
 .hot-panel col.c-m5,
 .hot-panel col.c-m30,
 .hot-panel col.c-m1h,
@@ -586,39 +588,37 @@ td {
 .hot-panel tbody td:nth-child(1) {
   width: 2.25rem;
   padding-left: 14px;
-  padding-right: 6px;
+  padding-right: 4px;
 }
 
-/* 集合: fixed comfortable band for avatar + name — not a flex sponge */
+/* 集合 stays a stable left column; metrics own the rest */
 .hot-panel thead th:nth-child(2),
 .hot-panel tbody td:nth-child(2) {
-  width: 15.5rem;
-  min-width: 15.5rem;
-  max-width: 15.5rem;
-  padding-left: 6px;
-  padding-right: 14px;
+  width: 15.25rem;
+  padding-left: 4px;
+  padding-right: 10px;
   overflow: hidden;
 }
 
-/* Metrics: content width, moderate gap, sit right next to 集合 */
+/* Red-box metrics: even columns, centered numbers, reach right edge */
 .hot-panel thead th:nth-child(n + 3),
 .hot-panel tbody td:nth-child(n + 3) {
-  width: auto;
-  padding-left: 12px;
-  padding-right: 12px;
-  text-align: right;
+  padding-left: 6px;
+  padding-right: 6px;
+  text-align: center;
   white-space: nowrap;
-}
-
-.hot-panel thead th:nth-child(3),
-.hot-panel tbody td:nth-child(3) {
-  /* first metric after 集合 — small lead-in, not a canyon */
-  padding-left: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .hot-panel thead th:nth-child(9),
 .hot-panel tbody td:nth-child(9) {
-  padding-right: 16px;
+  padding-right: 14px;
+}
+
+/* Price filter control stays usable when th is center-aligned */
+.hot-panel th.th-price .th-price-inner {
+  justify-content: center;
 }
 
 th {
@@ -1518,7 +1518,6 @@ html[data-theme="light"] .star-btn.is-on:hover {
   font-size: 0.84rem;
   line-height: 1.35;
   font-weight: 500;
-  text-align: right;
 }
 
 .price-cell {
@@ -1527,10 +1526,15 @@ html[data-theme="light"] .star-btn.is-on:hover {
   font-family: var(--ui);
   font-size: 0.8rem;
   line-height: 1.35;
-  text-align: right;
   max-width: none;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Hot metrics: inherit centered column alignment (not right-stuck) */
+.hot-panel tbody td.num,
+.hot-panel tbody td.price-cell {
+  text-align: center;
 }
 
 .price-tag {
