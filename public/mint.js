@@ -13,12 +13,47 @@
   const STAR_SVG = `<svg class="star-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none"><path d="M12 3.1l2.45 5.55 6 .55-4.55 3.95 1.4 5.85L12 15.85 6.7 19l1.4-5.85-4.55-3.95 6-.55L12 3.1z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round" fill="none"/></svg>`;
   const SEARCH_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>`;
 
+  /**
+   * Lightweight product updates — newest first.
+   * When shipping a user-visible fix, prepend one short line (zh + en). No backend.
+   */
+  const UPDATES = [
+    {
+      date: "2026-07-13",
+      zh: "过滤 veNFT / 投票锁仓类噪声，不再进热榜",
+      en: "Filter out veNFT / vote-escrow lock noise from the leaderboard",
+    },
+    {
+      date: "2026-07-13",
+      zh: "修正「已铸造」异常大数（误读 totalSupply）",
+      en: "Fix absurd Minted counts from bad totalSupply readings",
+    },
+    {
+      date: "2026-07-13",
+      zh: "铸完项目离开热榜；已铸完列表不再每几秒重绘",
+      en: "Sold-out leaves hot list; minted-out panel no longer re-renders every few seconds",
+    },
+    {
+      date: "2026-07-13",
+      zh: "免费 mint 统一显示「免费」，不再出现 0 ETH",
+      en: "Free mints always show Free instead of 0 ETH",
+    },
+    {
+      date: "2026-07-13",
+      zh: "铸造热榜列宽均分，消除中间大空档",
+      en: "Even hot-table columns across the panel width",
+    },
+  ];
+
   const I18N = {
     zh: {
       htmlLang: "zh-CN",
       title: "ROBIN NFT Radar · Robinhood Chain",
       brandTitle: "ROBIN NFT Radar",
       brandSub: "Robinhood Chain · 实时铸造热度",
+      updatesLink: "更新",
+      updatesTitle: "最近更新",
+      updatesClose: "关闭",
       refresh: "立即刷新",
       hotTitle: "🔥 铸造热榜",
       thCollection: "集合",
@@ -85,6 +120,9 @@
       title: "ROBIN NFT Radar · Robinhood Chain",
       brandTitle: "ROBIN NFT Radar",
       brandSub: "Robinhood Chain · Live mint heat",
+      updatesLink: "Updates",
+      updatesTitle: "Recent updates",
+      updatesClose: "Close",
       refresh: "Refresh",
       hotTitle: "🔥 Mint Leaderboard",
       thCollection: "Collection",
@@ -548,7 +586,20 @@
     syncWalletBtn(); // after i18n — keep address label if connected
     updateBlockedUi();
     updateFavoritesUi();
+    renderUpdatesList();
     syncPriceFilterUi();
+  }
+
+  function renderUpdatesList() {
+    const list = document.getElementById("updatesList");
+    if (!list) return;
+    list.innerHTML = UPDATES.map((u) => {
+      const text = lang === "en" ? u.en : u.zh;
+      return `<li>
+        <span class="upd-date">${escapeHtml(u.date)}</span>
+        <span class="upd-text">${escapeHtml(text)}</span>
+      </li>`;
+    }).join("");
   }
 
   function syncThemeToggle() {
@@ -1910,6 +1961,92 @@
 
     window.addEventListener("resize", positionFavoritesPanel);
     window.addEventListener("scroll", positionFavoritesPanel, true);
+  })();
+
+  // Lightweight updates panel (replaces empty Telegram link)
+  (function bindUpdatesPanel() {
+    const btn = $("btnUpdates");
+    const panel = $("updatesPanel");
+    const btnClose = $("btnCloseUpdates");
+    if (!btn || !panel) return;
+
+    if (panel.parentElement !== document.body) {
+      document.body.appendChild(panel);
+    }
+
+    let open = false;
+    let ignoreOutsideUntil = 0;
+
+    function position() {
+      const r = btn.getBoundingClientRect();
+      const w = panel.offsetWidth || 320;
+      let left = r.right - w;
+      if (left < 8) left = 8;
+      if (left + w > window.innerWidth - 8) left = window.innerWidth - w - 8;
+      panel.style.top = `${Math.round(r.bottom + 8)}px`;
+      panel.style.right = "auto";
+      panel.style.left = `${Math.round(left)}px`;
+    }
+
+    function close() {
+      open = false;
+      panel.hidden = true;
+      panel.classList.remove("is-open");
+      btn.setAttribute("aria-expanded", "false");
+    }
+
+    function show() {
+      renderUpdatesList();
+      open = true;
+      panel.hidden = false;
+      panel.classList.add("is-open");
+      btn.setAttribute("aria-expanded", "true");
+      position();
+      ignoreOutsideUntil = Date.now() + 200;
+    }
+
+    function toggle(ev) {
+      if (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+      }
+      if (open) close();
+      else show();
+    }
+
+    btn.setAttribute("aria-haspopup", "dialog");
+    btn.setAttribute("aria-expanded", "false");
+    btn.setAttribute("aria-controls", "updatesPanel");
+    btn.addEventListener("click", toggle);
+    if (btnClose) {
+      btnClose.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        close();
+      });
+    }
+    document.addEventListener("click", (ev) => {
+      if (!open || Date.now() < ignoreOutsideUntil) return;
+      const t = ev.target;
+      if (t && typeof t.closest === "function") {
+        if (t.closest("#btnUpdates") || t.closest("#updatesPanel")) return;
+      }
+      close();
+    });
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape" && open) close();
+    });
+    window.addEventListener("resize", () => {
+      if (open) position();
+    });
+    window.addEventListener(
+      "scroll",
+      () => {
+        if (open) position();
+      },
+      true
+    );
+    close();
   })();
 
   applyThemeUi();

@@ -18,7 +18,7 @@
         }
       })();
     </script>
-    <link rel="stylesheet" href="/mint.css?v=38" />
+    <link rel="stylesheet" href="/mint.css?v=39" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -44,8 +44,7 @@
         </div>
       </div>
       <div class="top-actions">
-        <nav class="top-links" aria-label="Social">
-          <!-- 换成你的真实账号链接即可 -->
+        <nav class="top-links" aria-label="Links">
           <a
             class="top-link"
             href="https://x.com/InstantSta53355"
@@ -54,13 +53,9 @@
             >Twitter</a
           >
           <span class="top-link-sep" aria-hidden="true">·</span>
-          <a
-            class="top-link"
-            href="https://t.me/"
-            target="_blank"
-            rel="noopener noreferrer"
-            >Telegram</a
-          >
+          <button type="button" class="top-link top-link-btn" id="btnUpdates" data-i18n="updatesLink">
+            更新
+          </button>
         </nav>
         <button
           type="button"
@@ -226,6 +221,17 @@
       <p class="blocked-empty" id="blockedEmpty" data-i18n="blockedEmpty">暂无屏蔽</p>
     </div>
 
-    <script src="/mint.js?v=42"></script>
+    <!-- Lightweight product updates (static list in mint.js) -->
+    <div class="blocked-panel updates-panel" id="updatesPanel" hidden>
+      <div class="blocked-panel-head">
+        <span data-i18n="updatesTitle">最近更新</span>
+        <button type="button" class="blocked-clear" id="btnCloseUpdates" data-i18n="updatesClose">
+          关闭
+        </button>
+      </div>
+      <ul class="updates-list" id="updatesList"></ul>
+    </div>
+
+    <script src="/mint.js?v=43"></script>
   </body>
 </html>
