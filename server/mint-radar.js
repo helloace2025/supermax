@@ -70,7 +70,7 @@ const mintedOutArchive = new Map();
 let mintedOutSaveTimer = null;
 
 /** Main mint poll interval — leave headroom under Blockscout rate limits */
-const POLL_MS = 2000;
+const POLL_MS = 5000;
 const FETCH_TIMEOUT_MS = 12000;
 /** Tx price lookups share the same Blockscout quota as poll — keep low. */
 const TX_PRICE_CONCURRENCY = 1;
