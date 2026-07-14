@@ -2966,6 +2966,12 @@ html[data-theme="light"] .mint-out-label {
   letter-spacing: 0.03em;
 }
 
+.out-meta .trade-volume {
+  color: var(--text);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 html[data-theme="light"] .out-meta .pill-out {
   color: #e11d48;
 }
@@ -3083,8 +3089,8 @@ html[data-theme="light"] .out-meta .pill-out {
   gap: 4px 8px;
   font-size: 0.68rem;
   line-height: 1.25;
-  flex-wrap: nowrap;
-  overflow: hidden;
+  flex-wrap: wrap;
+  overflow: visible;
   margin-top: 0;
 }
 

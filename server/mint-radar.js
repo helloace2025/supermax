@@ -26,6 +26,10 @@ const ZERO = "0x0000000000000000000000000000000000000000";
 /** OpenSea chain slug for Robinhood Chain (chainId 4663) */
 const OPENSEA_CHAIN = process.env.OPENSEA_CHAIN || "robinhood";
 const CHAIN_ID = Number(process.env.CHAIN_ID) || 4663;
+
+function openSeaApiKey() {
+  return (process.env.OPENSEA_API_KEY || "").trim();
+}
 /** @deprecated alias — keep internal code readable */
 const BLOCKSCOUT = BLOCKSCOUT_API;
 
@@ -165,6 +169,12 @@ let lastStaleLogAt = 0;
 const META_OK_TTL_MS = 30 * 60 * 1000;
 const META_MISS_TTL_MS = 5 * 60 * 1000;
 const META_GAP_MS = 350;
+
+/** Minted-out secondary sales volume (OpenSea collection stats) */
+const TRADE_VOLUME_TTL_MS = 15 * 60 * 1000;
+const TRADE_VOLUME_GAP_MS = 450;
+let tradeVolumeTimer = null;
+let tradeVolumeBusy = false;
 
 /** Health thresholds (ms) */
 const POLL_STALE_MS = 90_000; // no successful poll for this long → poller problem
@@ -726,14 +736,155 @@ function twitterUrl(username) {
   return `https://x.com/${u}`;
 }
 
+/** OpenSea REST (requires x-api-key on v2). */
+async function openSeaFetchJson(url) {
+  if (!openSeaApiKey()) {
+    throw new Error("OpenSea API key not configured");
+  }
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await bsFetch(url, {
+      signal: ctrl.signal,
+      headers: {
+        Accept: "application/json",
+        "User-Agent": "robin-nft-radar/1.0",
+        "x-api-key": openSeaApiKey(),
+      },
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(text ? `HTTP ${res.status}: ${text.slice(0, 120)}` : `HTTP ${res.status}`);
+    }
+    return await res.json();
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+/** Human label for OpenSea total.volume (ETH). 0 → "0", else "X ETH". */
+function formatTradeVolumeDisplay(volumeEth) {
+  if (volumeEth == null || !Number.isFinite(volumeEth)) return null;
+  if (volumeEth === 0) return "0 ETH";
+  const trim = (s) => s.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+  if (volumeEth >= 100) return `${trim(volumeEth.toFixed(2))} ETH`;
+  if (volumeEth >= 1) return `${trim(volumeEth.toFixed(4))} ETH`;
+  if (volumeEth >= 0.0001) return `${trim(volumeEth.toFixed(6))} ETH`;
+  return `${volumeEth} ETH`;
+}
+
+function slugFromOpenseaUrl(url) {
+  if (!url) return null;
+  const m = String(url).match(/opensea\.io\/collection\/([^/?#]+)/i);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+async function resolveCollectionSlug(contract) {
+  const c = String(contract || "").toLowerCase();
+  if (!c) return null;
+  const meta = getMeta(c);
+  if (meta.slug) return meta.slug;
+  const row = mintedOutArchive.get(c);
+  const fromUrl = slugFromOpenseaUrl(row?.opensea || meta.opensea);
+  if (fromUrl) {
+    meta.slug = fromUrl;
+    return fromUrl;
+  }
+  if (!openSeaApiKey()) return null;
+  try {
+    const info = await openSeaFetchJson(
+      `https://api.opensea.io/api/v2/chain/${OPENSEA_CHAIN}/contract/${c}`
+    );
+    const slug = info?.collection;
+    if (slug) {
+      meta.slug = slug;
+      return slug;
+    }
+  } catch {
+    /* miss */
+  }
+  return null;
+}
+
+async function fetchCollectionTradeVolume(slug) {
+  const data = await openSeaFetchJson(
+    `https://api.opensea.io/api/v2/collections/${encodeURIComponent(slug)}/stats`
+  );
+  const raw = data?.total?.volume;
+  const volumeEth =
+    raw == null || !Number.isFinite(Number(raw)) ? 0 : Number(raw);
+  return {
+    volumeEth,
+    volumeDisplay: formatTradeVolumeDisplay(volumeEth),
+  };
+}
+
+async function refreshTradeVolumeForContract(contract) {
+  const c = String(contract || "").toLowerCase();
+  const row = mintedOutArchive.get(c);
+  if (!row) return;
+  try {
+    const slug = await resolveCollectionSlug(c);
+    if (!slug) {
+      row.tradeVolumeStatus = "miss";
+      row.tradeVolumeAt = Date.now();
+      if (row.tradeVolumeDisplay == null) row.tradeVolumeDisplay = "0 ETH";
+      scheduleSaveMintedOutArchive();
+      return;
+    }
+    const { volumeEth, volumeDisplay } = await fetchCollectionTradeVolume(slug);
+    row.tradeVolumeEth = volumeEth;
+    row.tradeVolumeDisplay = volumeDisplay;
+    row.tradeVolumeAt = Date.now();
+    row.tradeVolumeStatus = "ok";
+    scheduleSaveMintedOutArchive();
+  } catch (e) {
+    row.tradeVolumeStatus = "error";
+    row.tradeVolumeAt = Date.now();
+    if (row.tradeVolumeDisplay == null) row.tradeVolumeDisplay = "0 ETH";
+    console.warn(`[mint-radar] trade volume ${short(c)}:`, e.message || e);
+  }
+}
+
+async function refreshAllTradeVolumes({ force = false } = {}) {
+  if (!openSeaApiKey() || !mintedOutArchive.size) return;
+  while (tradeVolumeBusy) await sleep(200);
+  tradeVolumeBusy = true;
+  try {
+    for (const c of mintedOutArchive.keys()) {
+      const row = mintedOutArchive.get(c);
+      const age = Date.now() - (row?.tradeVolumeAt || 0);
+      if (
+        !force &&
+        row?.tradeVolumeStatus === "ok" &&
+        age < TRADE_VOLUME_TTL_MS
+      ) {
+        continue;
+      }
+      await refreshTradeVolumeForContract(c);
+      await sleep(TRADE_VOLUME_GAP_MS);
+    }
+  } finally {
+    tradeVolumeBusy = false;
+  }
+}
+
+function kickTradeVolumeRefresh() {
+  refreshAllTradeVolumes().catch((e) => {
+    console.warn("[mint-radar] trade volume refresh:", e.message || e);
+  });
+}
+
 async function enrichFromOpenSea(contract) {
   const c = String(contract).toLowerCase();
   const contractUrl = `https://api.opensea.io/api/v2/chain/${OPENSEA_CHAIN}/contract/${c}`;
-  const info = await fetchJson(contractUrl);
+  const info = await openSeaFetchJson(contractUrl);
   const slug = info?.collection;
   if (!slug) return null;
 
-  const col = await fetchJson(`https://api.opensea.io/api/v2/collections/${encodeURIComponent(slug)}`);
+  const col = await openSeaFetchJson(
+    `https://api.opensea.io/api/v2/collections/${encodeURIComponent(slug)}`
+  );
   return {
     icon: resolveMediaUrl(col?.image_url) || null,
     twitter: twitterUrl(col?.twitter_username),
@@ -813,12 +964,17 @@ async function enrichOne(contract) {
 
   try {
     let got = null;
-    try {
-      got = await enrichFromOpenSea(contract);
-    } catch (e) {
-      // OpenSea miss / rate limit — fall through
-      if (!String(e.message || "").includes("HTTP 404")) {
-        console.warn(`[mint-radar] opensea meta ${short(contract)}:`, e.message || e);
+    if (openSeaApiKey()) {
+      try {
+        got = await enrichFromOpenSea(contract);
+      } catch (e) {
+        // OpenSea miss / rate limit — fall through
+        if (!String(e.message || "").includes("HTTP 404")) {
+          console.warn(
+            `[mint-radar] opensea meta ${short(contract)}:`,
+            e.message || e
+          );
+        }
       }
     }
 
@@ -1614,10 +1770,23 @@ function rememberMintedOut(row) {
     priceDisplay: row.priceDisplay || prev.priceDisplay || null,
     priceEth: row.priceEth ?? prev.priceEth ?? null,
     priceWei: row.priceWei ?? prev.priceWei ?? null,
+    tradeVolumeEth: row.tradeVolumeEth ?? prev.tradeVolumeEth ?? null,
+    tradeVolumeDisplay:
+      row.tradeVolumeDisplay ?? prev.tradeVolumeDisplay ?? null,
+    tradeVolumeAt: row.tradeVolumeAt ?? prev.tradeVolumeAt ?? null,
+    tradeVolumeStatus:
+      row.tradeVolumeStatus ?? prev.tradeVolumeStatus ?? null,
     mintedOut: true,
     archivedAt: prev.archivedAt || Date.now(),
     updatedAt: Date.now(),
   });
+  // First time sold-out hits archive — queue OpenSea volume (30m TTL thereafter)
+  if (
+    openSeaApiKey() &&
+    (prev.tradeVolumeAt == null || prev.tradeVolumeStatus == null)
+  ) {
+    setTimeout(() => refreshTradeVolumeForContract(c).catch(() => {}), 0);
+  }
   scheduleSaveMintedOutArchive();
 }
 
@@ -1642,6 +1811,11 @@ function collectMintedOut(limit = 50) {
   const n = Math.max(5, Math.min(100, Number(limit) || 50));
   const list = [...mintedOutArchive.values()].map((r) => {
     const m = getMeta(r.contract);
+    const tradeVolumeDisplay =
+      r.tradeVolumeDisplay ??
+      (r.tradeVolumeEth != null
+        ? formatTradeVolumeDisplay(Number(r.tradeVolumeEth))
+        : "0 ETH");
     return {
       ...r,
       icon: m.icon || r.icon || null,
@@ -1650,11 +1824,23 @@ function collectMintedOut(limit = 50) {
       telegram: m.telegram || null,
       website: m.website || null,
       opensea: m.opensea || r.opensea,
+      tradeVolumeDisplay,
+      tradeVolumeEth:
+        r.tradeVolumeEth ??
+        (tradeVolumeDisplay === "0 ETH" || tradeVolumeDisplay === "0" ? 0 : null),
       mintedOut: true,
     };
   });
   list.sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0));
-  return list.slice(0, n);
+  const slice = list.slice(0, n);
+  if (openSeaApiKey()) {
+    const stale = slice.some((r) => {
+      const age = Date.now() - (r.tradeVolumeAt || 0);
+      return r.tradeVolumeAt == null || age >= TRADE_VOLUME_TTL_MS;
+    });
+    if (stale) kickTradeVolumeRefresh();
+  }
+  return slice;
 }
 
 /** Hot leaderboard must not show sold-out collections (they live in mintedOut). */
@@ -1869,11 +2055,35 @@ export async function fetchWalletNfts(address, opts = {}) {
   };
 }
 
+/** Force-refresh OpenSea trade volumes for all minted-out archive entries. */
+export async function refreshMintedOutTradeVolumes({ force = true } = {}) {
+  await refreshAllTradeVolumes({ force });
+  return collectMintedOut(100).map((r) => ({
+    contract: r.contract,
+    name: r.name,
+    tradeVolumeEth: r.tradeVolumeEth,
+    tradeVolumeDisplay: r.tradeVolumeDisplay,
+    tradeVolumeStatus: r.tradeVolumeStatus,
+    tradeVolumeAt: r.tradeVolumeAt,
+  }));
+}
+
 export function startMintRadar() {
   if (pollTimer) return;
   loadMintedOutArchive();
   console.log("[mint-radar] starting (Blockscout poll)");
   console.log(`[mint-radar] DATA_DIR=${DATA_DIR}`);
+  if (openSeaApiKey()) {
+    console.log("[mint-radar] OpenSea API key enabled (minted-out trade volume)");
+    setTimeout(() => kickTradeVolumeRefresh(), 8000);
+    tradeVolumeTimer = setInterval(() => {
+      refreshAllTradeVolumes({ force: true }).catch(() => {});
+    }, TRADE_VOLUME_TTL_MS);
+  } else {
+    console.warn(
+      "[mint-radar] OPENSEA_API_KEY unset — minted-out 交易额 will show 0 until configured"
+    );
+  }
   safePollOnce();
   pollTimer = setInterval(safePollOnce, POLL_MS);
 }
@@ -1882,5 +2092,9 @@ export function stopMintRadar() {
   if (pollTimer) {
     clearInterval(pollTimer);
     pollTimer = null;
+  }
+  if (tradeVolumeTimer) {
+    clearInterval(tradeVolumeTimer);
+    tradeVolumeTimer = null;
   }
 }

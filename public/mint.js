@@ -27,6 +27,11 @@
   const UPDATES = [
     {
       date: "2026-07-14",
+      zh: "已铸完交易额：OpenSea 总成交额每 15 分钟更新，显示为「交易额：X ETH」",
+      en: "Minted-out trade volume — OpenSea total volume, refreshed every 15m as “Volume: X ETH”",
+    },
+    {
+      date: "2026-07-14",
       zh: "官方 NFT 上线：OpenSea 弹窗可直达 Supermax Mech 合集 mint",
       en: "Official NFT live — OpenSea modal links to Supermax Mech collection mint",
     },
@@ -198,7 +203,7 @@
         `最新 mint ${newestRel || "—"} · 上次成功轮询 ${pollRel || "—"} · 缓存 ${store ?? "—"} · 连续失败 ${fails ?? 0}`,
       socialOff: (title) => `${title}（未检测到）`,
       minter: "minter",
-      explorer: "Explorer",
+      tradeVolume: "交易额",
       blockTitle: "屏蔽此项目",
       googleSearchTitle: "Google 搜图",
       walletDisconnect: "退出钱包",
@@ -356,7 +361,7 @@
         `Newest mint ${newestRel || "—"} · last OK poll ${pollRel || "—"} · store ${store ?? "—"} · fails ${fails ?? 0}`,
       socialOff: (title) => `${title} (not found)`,
       minter: "minter",
-      explorer: "Explorer",
+      tradeVolume: "Volume",
       blockTitle: "Block this collection",
       googleSearchTitle: "Google image search",
       walletDisconnect: "Disconnect",
@@ -1385,16 +1390,52 @@
     return kept;
   }
 
-  /** Merge one sold-out row into sticky local archive. Returns true if newly added. */
+  /** Merge one sold-out row into sticky local archive. Returns true if changed. */
   function absorbMintedOutRow(r) {
     const c = String(r?.contract || "").toLowerCase();
     if (!c || c.length < 10) return false;
-    if (localMintedOut.has(c)) {
-      // Keep first snapshot stable — no thrashing fields every poll
-      return false;
+    const prev = localMintedOut.get(c);
+    if (prev) {
+      const volChanged =
+        r.tradeVolumeDisplay !== prev.tradeVolumeDisplay ||
+        Number(r.tradeVolumeAt || 0) !== Number(prev.tradeVolumeAt || 0);
+      if (!volChanged) return false;
+      localMintedOut.set(c, {
+        ...prev,
+        tradeVolumeEth: r.tradeVolumeEth ?? prev.tradeVolumeEth,
+        tradeVolumeDisplay: r.tradeVolumeDisplay ?? prev.tradeVolumeDisplay,
+        tradeVolumeAt: r.tradeVolumeAt ?? prev.tradeVolumeAt,
+        tradeVolumeStatus: r.tradeVolumeStatus ?? prev.tradeVolumeStatus,
+      });
+      return true;
     }
     localMintedOut.set(c, { ...r, contract: c, mintedOut: true });
     return true;
+  }
+
+  function formatTradeVolumeEthAmount(eth) {
+    if (eth == null || !Number.isFinite(eth)) return "0 ETH";
+    if (eth === 0) return "0 ETH";
+    const trim = (s) => s.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+    if (eth >= 100) return `${trim(eth.toFixed(2))} ETH`;
+    if (eth >= 1) return `${trim(eth.toFixed(4))} ETH`;
+    if (eth >= 0.0001) return `${trim(eth.toFixed(6))} ETH`;
+    return `${eth} ETH`;
+  }
+
+  function formatTradeVolumeCell(r) {
+    const label = t("tradeVolume");
+    const sep = lang === "en" ? ": " : "：";
+    const raw = r?.tradeVolumeDisplay;
+    let amount = "0 ETH";
+    if (raw === "0") {
+      amount = "0 ETH";
+    } else if (raw != null && raw !== "") {
+      amount = /eth/i.test(String(raw)) ? String(raw).trim() : `${raw} ETH`;
+    } else if (r?.tradeVolumeEth != null && Number.isFinite(Number(r.tradeVolumeEth))) {
+      amount = formatTradeVolumeEthAmount(Number(r.tradeVolumeEth));
+    }
+    return `${label}${sep}${amount}`;
   }
 
   function localMintedOutList() {
@@ -1404,7 +1445,12 @@
   }
 
   function mintedOutSignature(list) {
-    return list.map((r) => String(r.contract || "").toLowerCase()).join("|");
+    return list
+      .map(
+        (r) =>
+          `${String(r.contract || "").toLowerCase()}:${r.tradeVolumeDisplay ?? ""}:${r.tradeVolumeAt ?? ""}`
+      )
+      .join("|");
   }
 
   /** Always hide Uniswap LP position NFTs (no UI toggle). */
@@ -1819,8 +1865,7 @@
             <span class="price-tag">${escapeHtml(priceText)}</span>
             <span>supply ${escapeHtml(String(supplyLabel))}</span>
             <span>holders ${fmtNum(r.holders)}</span>
-            <a href="${r.opensea || openseaUrl(r.contract, r) || "#"}" target="_blank" rel="noopener">OpenSea ↗</a>
-            <a class="explorer-link" href="${r.explorerToken || "#"}" target="_blank" rel="noopener">${escapeHtml(t("explorer"))}</a>
+            <span class="trade-volume">${escapeHtml(formatTradeVolumeCell(r))}</span>
           </div>
         </article>`;
       })
