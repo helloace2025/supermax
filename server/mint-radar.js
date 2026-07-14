@@ -709,6 +709,11 @@ function needsEnrich(meta) {
   // maxSupply miss must NOT wait for full 30m social meta TTL — retry often
   if (meta.maxSupplyStatus !== "ok" && supplyAge > 60_000) return true;
 
+  // No Twitter yet — retry (API may have been empty; HTML fill may have been deferred)
+  if (meta.status === "ok" && !meta.twitter && age > 90_000) {
+    return true;
+  }
+
   if (meta.status === "ok") return age > META_OK_TTL_MS;
   if (meta.status === "miss" || meta.status === "error") return age > META_MISS_TTL_MS;
   return true;
@@ -736,21 +741,38 @@ function twitterUrl(username) {
   return `https://x.com/${u}`;
 }
 
-/** OpenSea REST (requires x-api-key on v2). */
+/** OpenSea / site chrome handles — not the collection's own X */
+const OPENSEA_X_NOISE = new Set([
+  "opensea",
+  "opensea_support",
+  "openseasupport",
+  "opensea_offers",
+  "intent",
+  "share",
+  "home",
+  "search",
+  "i",
+  "hashtag",
+]);
+
+/**
+ * OpenSea REST JSON.
+ * Prefer x-api-key when set (needed for stats/volume; also more reliable for meta).
+ * Does not throw solely because key is missing — caller may fall back to HTML scrape.
+ */
 async function openSeaFetchJson(url) {
-  if (!openSeaApiKey()) {
-    throw new Error("OpenSea API key not configured");
-  }
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
   try {
+    const headers = {
+      Accept: "application/json",
+      "User-Agent": "robin-nft-radar/1.0",
+    };
+    const key = openSeaApiKey();
+    if (key) headers["x-api-key"] = key;
     const res = await bsFetch(url, {
       signal: ctrl.signal,
-      headers: {
-        Accept: "application/json",
-        "User-Agent": "robin-nft-radar/1.0",
-        "x-api-key": openSeaApiKey(),
-      },
+      headers,
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
@@ -759,6 +781,164 @@ async function openSeaFetchJson(url) {
     return await res.json();
   } finally {
     clearTimeout(t);
+  }
+}
+
+/**
+ * Public OpenSea HTML — Twitter sits ~1MB into the page (not in the first 600KB).
+ * Prefer collection URL when slug known; fall back to contract URL.
+ */
+async function openSeaFetchHtml(url) {
+  const ctrl = new AbortController();
+  // HTML pages are heavy; allow a bit longer than REST
+  const t = setTimeout(() => ctrl.abort(), Math.max(FETCH_TIMEOUT_MS, 18_000));
+  try {
+    const res = await bsFetch(url, {
+      signal: ctrl.signal,
+      headers: {
+        Accept: "text/html,application/xhtml+xml",
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      },
+      redirect: "follow",
+    });
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+    return await res.text();
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+/** Parse collection slug + project X handle from OpenSea public HTML. */
+function parseOpenSeaCollectionHtml(html) {
+  if (!html || typeof html !== "string") return null;
+  const slugMatch = html.match(/opensea\.io\/collection\/([a-zA-Z0-9_-]+)/i);
+  const slug = slugMatch ? slugMatch[1] : null;
+
+  let twitterUser = null;
+  // OpenSea page JSON uses camelCase twitterUsername; REST API uses twitter_username
+  const jsonTw =
+    html.match(/"twitterUsername"\s*:\s*"(@?[A-Za-z0-9_]{1,30})"/i) ||
+    html.match(/"twitter_username"\s*:\s*"(@?[A-Za-z0-9_]{1,30})"/i);
+  if (jsonTw?.[1]) {
+    const h = jsonTw[1].replace(/^@/, "");
+    if (h && !OPENSEA_X_NOISE.has(h.toLowerCase())) twitterUser = h;
+  }
+  if (!twitterUser) {
+    const sameAs = html.match(
+      /https?:\/\/(?:twitter\.com|x\.com)\/([A-Za-z0-9_]{1,30})/i
+    );
+    if (sameAs?.[1] && !OPENSEA_X_NOISE.has(sameAs[1].toLowerCase())) {
+      twitterUser = sameAs[1];
+    }
+  }
+  if (!twitterUser) {
+    const re = /(?:twitter\.com|x\.com)\/([A-Za-z0-9_]{1,30})/gi;
+    let m;
+    while ((m = re.exec(html)) !== null) {
+      const h = m[1];
+      if (!h || OPENSEA_X_NOISE.has(h.toLowerCase())) continue;
+      twitterUser = h;
+      break;
+    }
+  }
+
+  let icon = null;
+  const og =
+    html.match(
+      /property=["']og:image["']\s+content=["']([^"']+)["']/i
+    ) ||
+    html.match(
+      /content=["']([^"']+)["']\s+property=["']og:image["']/i
+    );
+  if (og?.[1]) icon = resolveMediaUrl(og[1]);
+
+  const twitter = twitterUrl(twitterUser);
+  if (!slug && !twitter && !icon) return null;
+  return {
+    slug,
+    twitter,
+    icon,
+    discord: null,
+    telegram: null,
+    website: null,
+    description: null,
+    opensea: slug
+      ? `https://opensea.io/collection/${encodeURIComponent(slug)}`
+      : null,
+    source: "opensea",
+  };
+}
+
+/**
+ * HTML scrape for Twitter. Prefer collection slug page (stable); else contract page.
+ */
+async function enrichFromOpenSeaHtml(contract, slugHint = null) {
+  const c = String(contract || "").toLowerCase();
+  if (!c && !slugHint) return null;
+  const urls = [];
+  if (slugHint) {
+    urls.push(
+      `https://opensea.io/collection/${encodeURIComponent(String(slugHint))}`
+    );
+  }
+  if (c) {
+    urls.push(`https://opensea.io/contract/${OPENSEA_CHAIN}/${c}`);
+  }
+  let lastErr = null;
+  for (const url of urls) {
+    try {
+      const html = await openSeaFetchHtml(url);
+      const parsed = parseOpenSeaCollectionHtml(html);
+      if (parsed?.twitter || parsed?.slug || parsed?.icon) return parsed;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  if (lastErr) throw lastErr;
+  return null;
+}
+
+/** Background: fill Twitter after API returned icon/meta without twitter_username */
+const twitterHtmlQueued = new Set();
+function scheduleTwitterHtmlFill(contract, slug) {
+  const c = String(contract || "").toLowerCase();
+  if (!c || twitterHtmlQueued.has(c)) return;
+  const meta = getMeta(c);
+  if (meta.twitter) return;
+  twitterHtmlQueued.add(c);
+  setTimeout(() => {
+    fillTwitterFromHtml(c, slug)
+      .catch(() => {})
+      .finally(() => twitterHtmlQueued.delete(c));
+  }, 50);
+}
+
+async function fillTwitterFromHtml(contract, slugHint) {
+  const c = String(contract || "").toLowerCase();
+  const meta = getMeta(c);
+  if (meta.twitter) return;
+  try {
+    const scraped = await enrichFromOpenSeaHtml(c, slugHint || meta.slug);
+    if (!scraped?.twitter) return;
+    meta.twitter = scraped.twitter;
+    if (scraped.slug) meta.slug = scraped.slug;
+    if (scraped.opensea) meta.opensea = scraped.opensea;
+    if (scraped.icon && !meta.icon) meta.icon = scraped.icon;
+    if (!meta.source) meta.source = "opensea";
+    meta.updatedAt = Date.now();
+    if (meta.status !== "ok" && (meta.icon || meta.twitter)) {
+      meta.status = "ok";
+    }
+  } catch (e) {
+    if (!String(e?.message || "").includes("HTTP 404")) {
+      console.warn(
+        `[mint-radar] twitter html ${short(c)}:`,
+        e?.message || e
+      );
+    }
   }
 }
 
@@ -877,27 +1057,41 @@ function kickTradeVolumeRefresh() {
 
 async function enrichFromOpenSea(contract) {
   const c = String(contract).toLowerCase();
-  const contractUrl = `https://api.opensea.io/api/v2/chain/${OPENSEA_CHAIN}/contract/${c}`;
-  const info = await openSeaFetchJson(contractUrl);
-  const slug = info?.collection;
-  if (!slug) return null;
 
-  const col = await openSeaFetchJson(
-    `https://api.opensea.io/api/v2/collections/${encodeURIComponent(slug)}`
-  );
-  return {
-    icon: resolveMediaUrl(col?.image_url) || null,
-    twitter: twitterUrl(col?.twitter_username),
-    discord: col?.discord_url || null,
-    telegram: col?.telegram_url || null,
-    website: col?.project_url || null,
-    description: col?.description || null,
-    slug,
-    opensea:
-      col?.opensea_url ||
-      `https://opensea.io/collection/${encodeURIComponent(slug)}`,
-    source: "opensea",
-  };
+  // 1) REST API first (fast). Do NOT await multi‑MB HTML here — it starved the meta queue.
+  try {
+    const contractUrl = `https://api.opensea.io/api/v2/chain/${OPENSEA_CHAIN}/contract/${c}`;
+    const info = await openSeaFetchJson(contractUrl);
+    const slug = info?.collection;
+    if (slug) {
+      const col = await openSeaFetchJson(
+        `https://api.opensea.io/api/v2/collections/${encodeURIComponent(slug)}`
+      );
+      const twitter = twitterUrl(col?.twitter_username);
+      // Empty twitter_username is common — fill in background without blocking others
+      if (!twitter) {
+        scheduleTwitterHtmlFill(c, slug);
+      }
+      return {
+        icon: resolveMediaUrl(col?.image_url) || null,
+        twitter,
+        discord: col?.discord_url || null,
+        telegram: col?.telegram_url || null,
+        website: col?.project_url || null,
+        description: col?.description || null,
+        slug,
+        opensea:
+          col?.opensea_url ||
+          `https://opensea.io/collection/${encodeURIComponent(slug)}`,
+        source: "opensea",
+      };
+    }
+  } catch {
+    /* fall through to HTML */
+  }
+
+  // 2) Public HTML fallback when REST fails (401 / network)
+  return enrichFromOpenSeaHtml(c);
 }
 
 async function enrichFromBlockscout(contract) {
@@ -964,37 +1158,43 @@ async function enrichOne(contract) {
 
   try {
     let got = null;
-    if (openSeaApiKey()) {
-      try {
-        got = await enrichFromOpenSea(contract);
-      } catch (e) {
-        // OpenSea miss / rate limit — fall through
-        if (!String(e.message || "").includes("HTTP 404")) {
-          console.warn(
-            `[mint-radar] opensea meta ${short(contract)}:`,
-            e.message || e
-          );
-        }
+    try {
+      got = await enrichFromOpenSea(contract);
+    } catch (e) {
+      if (!String(e.message || "").includes("HTTP 404")) {
+        console.warn(
+          `[mint-radar] opensea meta ${short(contract)}:`,
+          e.message || e
+        );
       }
     }
 
     if (got) {
       meta.icon = got.icon || hintIcon || null;
-      meta.twitter = got.twitter || null;
-      meta.discord = got.discord || null;
-      meta.telegram = got.telegram || null;
-      meta.website = got.website || null;
-      meta.description = got.description || null;
-      meta.slug = got.slug || null;
+      meta.twitter = got.twitter || meta.twitter || null;
+      meta.discord = got.discord || meta.discord || null;
+      meta.telegram = got.telegram || meta.telegram || null;
+      meta.website = got.website || meta.website || null;
+      meta.description = got.description || meta.description || null;
+      meta.slug = got.slug || meta.slug || null;
       meta.opensea = got.opensea || meta.opensea;
-      meta.source = got.source;
+      meta.source = got.source || meta.source;
+      // Fill avatar from Blockscout if OpenSea HTML/API had Twitter but no image
+      if (!meta.icon) {
+        try {
+          const bsIcon = await enrichFromBlockscout(contract);
+          if (bsIcon?.icon) meta.icon = bsIcon.icon;
+        } catch {
+          /* optional */
+        }
+      }
       meta.status = meta.icon || meta.twitter || meta.discord ? "ok" : "miss";
       await enrichMaxSupply(meta, contract);
       meta.updatedAt = Date.now();
       return meta;
     }
 
-    // Blockscout image fallback
+    // Blockscout image fallback (no socials)
     const bs = await enrichFromBlockscout(contract);
     if (bs?.icon || hintIcon) {
       meta.icon = bs?.icon || hintIcon;
@@ -2074,14 +2274,16 @@ export function startMintRadar() {
   console.log("[mint-radar] starting (Blockscout poll)");
   console.log(`[mint-radar] DATA_DIR=${DATA_DIR}`);
   if (openSeaApiKey()) {
-    console.log("[mint-radar] OpenSea API key enabled (minted-out trade volume)");
+    console.log(
+      "[mint-radar] OpenSea API key enabled (meta + minted-out 交易额)"
+    );
     setTimeout(() => kickTradeVolumeRefresh(), 8000);
     tradeVolumeTimer = setInterval(() => {
       refreshAllTradeVolumes({ force: true }).catch(() => {});
     }, TRADE_VOLUME_TTL_MS);
   } else {
     console.warn(
-      "[mint-radar] OPENSEA_API_KEY unset — minted-out 交易额 will show 0 until configured"
+      "[mint-radar] OPENSEA_API_KEY unset — Twitter via public OpenSea HTML; 交易额 needs key"
     );
   }
   safePollOnce();
