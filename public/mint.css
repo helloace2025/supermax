@@ -364,6 +364,26 @@ button.top-link.raffle-nav-btn {
   user-select: none;
 }
 
+/* OpenSea wordmark — bold + solid brand blue */
+.opensea-brand {
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  color: #2081e2;
+}
+
+button.top-link.top-link-btn.opensea-brand {
+  color: #2081e2;
+}
+
+button.top-link.top-link-btn.opensea-brand:hover {
+  color: #4aa8ff;
+}
+
+.os-modal-badge.opensea-brand {
+  font-weight: 800;
+  color: #2081e2;
+}
+
 /* Compact changelog panel (reuses .blocked-panel shell) */
 .updates-panel {
   width: min(340px, 90vw);
