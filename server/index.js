@@ -101,12 +101,26 @@ app.get("/health", (_req, res) => {
 // Richer status for debugging (not used by Railway healthcheck)
 app.get("/api/status", (_req, res) => {
   try {
-    const snap = getMintSnapshot({ windowMin: 5, feedLimit: 1, hotLimit: 1 });
+    const snap = getMintSnapshot({
+      windowMin: 5,
+      feedLimit: 1,
+      hotLimit: 1,
+      outLimit: 0,
+    });
+    const m = process.memoryUsage();
+    const mb = (n) => Math.round((n / 1024 / 1024) * 10) / 10;
     res.status(200).json({
       ok: true,
       product: "robin-nft-radar",
       chain: snap.chain,
       status: snap.status,
+      memory: {
+        rssMb: mb(m.rss),
+        heapUsedMb: mb(m.heapUsed),
+        heapTotalMb: mb(m.heapTotal),
+        externalMb: mb(m.external),
+      },
+      uptimeSec: Math.round(process.uptime()),
     });
   } catch (e) {
     res.status(200).json({

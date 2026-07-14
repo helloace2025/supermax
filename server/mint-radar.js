@@ -97,11 +97,13 @@ const VE_OR_GOV_NFT_RE =
 const VE_OR_GOV_METHOD_RE =
   /create_?lock|increase_?(amount|unlock_?time)|merge(_?nft)?|split(_?nft)?|deposit_?for|withdraw(_?nft)?|checkpoint/i;
 
-const MAX_EVENTS = 4000;
+const MAX_EVENTS = 3000;
 /** Sticky minted-out history (survives event eviction; file survives restarts if volume set) */
 const __radarDir = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.DATA_DIR || path.join(__radarDir, "..", "data");
 const MINTED_OUT_FILE = path.join(DATA_DIR, "minted-out.json");
+/** Cap sticky archive so overnight growth cannot OOM Railway hobby RAM */
+const MINTED_OUT_MAX = 200;
 /** @type {Map<string, object>} contract -> archived sold-out row */
 const mintedOutArchive = new Map();
 let mintedOutSaveTimer = null;
@@ -112,11 +114,25 @@ const FETCH_TIMEOUT_MS = 12000;
 /** Tx price lookups share the same Blockscout quota as poll — keep low. */
 const TX_PRICE_CONCURRENCY = 1;
 const TX_PRICE_GAP_MS = 350;
-const TX_PRICE_CACHE_MAX = 8000;
+const TX_PRICE_CACHE_MAX = 4000;
 const TX_PRICE_ERROR_COOLDOWN_MS = 30_000;
 /** Global pause after HTTP 429 so poll + price workers back off together */
 const RATE_LIMIT_BACKOFF_MS = 8_000;
 let rateLimitUntil = 0;
+
+/**
+ * OpenSea public HTML pages are multi‑MB. Loading whole bodies concurrently
+ * is the main Railway OOM vector ("Deploy Ran Out of Memory").
+ */
+const OPENSEA_HTML_MAX_BYTES = Math.max(
+  512 * 1024,
+  Number(process.env.OPENSEA_HTML_MAX_BYTES) || 1.5 * 1024 * 1024
+);
+/** Only one OpenSea HTML scrape at a time (meta worker + twitter fill share this) */
+let openSeaHtmlInFlight = 0;
+const OPENSEA_HTML_MAX_CONCURRENT = 1;
+/** @type {Array<() => void>} */
+const openSeaHtmlWaiters = [];
 
 /** @type {Map<string, object>} eventKey -> mint event */
 const eventMap = new Map();
@@ -143,11 +159,17 @@ let txPriceResolvedErr = 0;
  * @type {Map<string, object>}
  */
 const metaCache = new Map();
+/** Bound meta entries (each may hold description/urls); trim cold contracts */
+const META_CACHE_MAX = 500;
 /** @type {Set<string>} */
 const metaQueued = new Set();
 /** @type {string[]} */
 const metaQueue = [];
 let metaBusy = false;
+/** Serialize background Twitter HTML fills (never fan-out multi-MB pages) */
+/** @type {Array<{contract: string, slug: string|null}>} */
+const twitterHtmlJobs = [];
+let twitterHtmlWorkerBusy = false;
 
 let polling = false;
 let pollTimer = null;
@@ -609,7 +631,132 @@ function emptyMeta(contract) {
     maxSupplyStatus: null,
     /** last time we attempted eth_call for maxSupply */
     maxSupplyCheckedAt: 0,
+    /** last OpenSea HTML scrape for Twitter (backoff — avoid 90s re-fetch OOM loop) */
+    twitterHtmlTriedAt: 0,
+    /** true after a successful HTML parse that still had no twitter handle */
+    twitterHtmlMiss: false,
   };
+}
+
+/** Truncate free-text fields so OpenSea blurbs cannot bloat heap */
+function clipText(s, max = 280) {
+  if (s == null) return null;
+  const t = String(s);
+  if (t.length <= max) return t;
+  return t.slice(0, max);
+}
+
+/**
+ * Drop cold meta entries not referenced by live events or minted-out archive.
+ * Prefer deleting unreferenced keys; if still over cap, drop oldest by updatedAt.
+ */
+function trimMetaCache() {
+  if (metaCache.size <= META_CACHE_MAX) return;
+  /** @type {Set<string>} */
+  const keep = new Set();
+  for (const e of eventMap.values()) {
+    if (e?.contract) keep.add(String(e.contract).toLowerCase());
+  }
+  for (const c of mintedOutArchive.keys()) keep.add(c);
+  for (const k of metaQueued) keep.add(k);
+  for (const k of metaQueue) keep.add(k);
+
+  for (const key of [...metaCache.keys()]) {
+    if (metaCache.size <= META_CACHE_MAX) return;
+    if (!keep.has(key)) metaCache.delete(key);
+  }
+  if (metaCache.size <= META_CACHE_MAX) return;
+
+  const ranked = [...metaCache.entries()].sort(
+    (a, b) => (Number(a[1]?.updatedAt) || 0) - (Number(b[1]?.updatedAt) || 0)
+  );
+  while (metaCache.size > META_CACHE_MAX && ranked.length) {
+    const [key] = ranked.shift();
+    // Prefer dropping non-keep; if all kept, drop oldest anyway
+    if (!keep.has(key) || metaCache.size > META_CACHE_MAX) {
+      metaCache.delete(key);
+    }
+  }
+}
+
+function trimMintedOutArchive() {
+  if (mintedOutArchive.size <= MINTED_OUT_MAX) return;
+  const ranked = [...mintedOutArchive.entries()].sort(
+    (a, b) => (Number(a[1]?.lastTs) || 0) - (Number(b[1]?.lastTs) || 0)
+  );
+  while (ranked.length > MINTED_OUT_MAX) {
+    const [k] = ranked.shift();
+    mintedOutArchive.delete(k);
+  }
+}
+
+function processMemoryStats() {
+  const m = process.memoryUsage();
+  const mb = (n) => Math.round((n / 1024 / 1024) * 10) / 10;
+  return {
+    rssMb: mb(m.rss),
+    heapUsedMb: mb(m.heapUsed),
+    heapTotalMb: mb(m.heapTotal),
+    externalMb: mb(m.external),
+    arrayBuffersMb: mb(m.arrayBuffers || 0),
+  };
+}
+
+async function withOpenSeaHtmlSlot(fn) {
+  while (openSeaHtmlInFlight >= OPENSEA_HTML_MAX_CONCURRENT) {
+    await new Promise((resolve) => openSeaHtmlWaiters.push(resolve));
+  }
+  openSeaHtmlInFlight += 1;
+  try {
+    return await fn();
+  } finally {
+    openSeaHtmlInFlight -= 1;
+    const next = openSeaHtmlWaiters.shift();
+    if (next) next();
+  }
+}
+
+/** Read response body with a hard byte cap (prevents multi-MB OpenSea pages on heap). */
+async function readResponseTextCapped(res, maxBytes) {
+  const limit = Math.max(64 * 1024, maxBytes | 0);
+  // undici / fetch: prefer streaming when available
+  const body = res.body;
+  if (body && typeof body.getReader === "function") {
+    const reader = body.getReader();
+    const chunks = [];
+    let total = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value?.byteLength) continue;
+        total += value.byteLength;
+        if (total <= limit) {
+          chunks.push(Buffer.from(value));
+        } else {
+          const overflow = total - limit;
+          const keep = value.byteLength - overflow;
+          if (keep > 0) chunks.push(Buffer.from(value.slice(0, keep)));
+          try {
+            await reader.cancel();
+          } catch {
+            /* ignore */
+          }
+          break;
+        }
+      }
+    } catch (e) {
+      try {
+        await reader.cancel();
+      } catch {
+        /* ignore */
+      }
+      throw e;
+    }
+    return Buffer.concat(chunks).toString("utf8");
+  }
+  const text = await res.text();
+  return text.length > limit ? text.slice(0, limit) : text;
 }
 
 /**
@@ -694,9 +841,15 @@ async function fetchMaxSupply(contract) {
 function getMeta(contract) {
   const key = String(contract || "").toLowerCase();
   if (!key) return emptyMeta("");
-  if (!metaCache.has(key)) metaCache.set(key, emptyMeta(key));
+  if (!metaCache.has(key)) {
+    metaCache.set(key, emptyMeta(key));
+    if (metaCache.size > META_CACHE_MAX) trimMetaCache();
+  }
   return metaCache.get(key);
 }
+
+/** How long to wait before re-scraping OpenSea HTML for a missing Twitter handle */
+const TWITTER_HTML_RETRY_MS = 45 * 60 * 1000;
 
 function needsEnrich(meta) {
   if (!meta || meta.status === "pending") return true;
@@ -709,9 +862,12 @@ function needsEnrich(meta) {
   // maxSupply miss must NOT wait for full 30m social meta TTL — retry often
   if (meta.maxSupplyStatus !== "ok" && supplyAge > 60_000) return true;
 
-  // No Twitter yet — retry (API may have been empty; HTML fill may have been deferred)
-  if (meta.status === "ok" && !meta.twitter && age > 90_000) {
-    return true;
+  // No Twitter yet — only re-queue after long backoff (HTML scrape is expensive / OOM-prone)
+  if (meta.status === "ok" && !meta.twitter) {
+    const sinceHtml = Date.now() - (meta.twitterHtmlTriedAt || 0);
+    if (!meta.twitterHtmlTriedAt || sinceHtml > TWITTER_HTML_RETRY_MS) {
+      return age > 5 * 60_000;
+    }
   }
 
   if (meta.status === "ok") return age > META_OK_TTL_MS;
@@ -785,30 +941,32 @@ async function openSeaFetchJson(url) {
 }
 
 /**
- * Public OpenSea HTML — Twitter sits ~1MB into the page (not in the first 600KB).
- * Prefer collection URL when slug known; fall back to contract URL.
+ * Public OpenSea HTML — Twitter often sits past the first ~1MB of the page.
+ * Body is hard-capped and globally serialized so Railway hobby RAM stays safe.
  */
 async function openSeaFetchHtml(url) {
-  const ctrl = new AbortController();
-  // HTML pages are heavy; allow a bit longer than REST
-  const t = setTimeout(() => ctrl.abort(), Math.max(FETCH_TIMEOUT_MS, 18_000));
-  try {
-    const res = await bsFetch(url, {
-      signal: ctrl.signal,
-      headers: {
-        Accept: "text/html,application/xhtml+xml",
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      },
-      redirect: "follow",
-    });
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
+  return withOpenSeaHtmlSlot(async () => {
+    const ctrl = new AbortController();
+    // HTML pages are heavy; allow a bit longer than REST
+    const t = setTimeout(() => ctrl.abort(), Math.max(FETCH_TIMEOUT_MS, 18_000));
+    try {
+      const res = await bsFetch(url, {
+        signal: ctrl.signal,
+        headers: {
+          Accept: "text/html,application/xhtml+xml",
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        },
+        redirect: "follow",
+      });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      return await readResponseTextCapped(res, OPENSEA_HTML_MAX_BYTES);
+    } finally {
+      clearTimeout(t);
     }
-    return await res.text();
-  } finally {
-    clearTimeout(t);
-  }
+  });
 }
 
 /** Parse collection slug + project X handle from OpenSea public HTML. */
@@ -878,6 +1036,10 @@ function parseOpenSeaCollectionHtml(html) {
 async function enrichFromOpenSeaHtml(contract, slugHint = null) {
   const c = String(contract || "").toLowerCase();
   if (!c && !slugHint) return null;
+  if (c) {
+    const meta = getMeta(c);
+    meta.twitterHtmlTriedAt = Date.now();
+  }
   const urls = [];
   if (slugHint) {
     urls.push(
@@ -908,22 +1070,59 @@ function scheduleTwitterHtmlFill(contract, slug) {
   if (!c || twitterHtmlQueued.has(c)) return;
   const meta = getMeta(c);
   if (meta.twitter) return;
+  // Honor long backoff so overnight meta TTL does not re-download HTML every few minutes
+  if (
+    meta.twitterHtmlTriedAt &&
+    Date.now() - meta.twitterHtmlTriedAt < TWITTER_HTML_RETRY_MS
+  ) {
+    return;
+  }
   twitterHtmlQueued.add(c);
-  setTimeout(() => {
-    fillTwitterFromHtml(c, slug)
-      .catch(() => {})
-      .finally(() => twitterHtmlQueued.delete(c));
-  }, 50);
+  twitterHtmlJobs.push({ contract: c, slug: slug || null });
+  kickTwitterHtmlWorker();
+}
+
+function kickTwitterHtmlWorker() {
+  if (twitterHtmlWorkerBusy) return;
+  twitterHtmlWorkerBusy = true;
+  (async () => {
+    try {
+      while (twitterHtmlJobs.length) {
+        const job = twitterHtmlJobs.shift();
+        if (!job) continue;
+        try {
+          await fillTwitterFromHtml(job.contract, job.slug);
+        } catch {
+          /* logged inside */
+        } finally {
+          twitterHtmlQueued.delete(job.contract);
+        }
+        // Small gap so RSS can settle after multi-MB scrape
+        await sleep(400);
+      }
+    } finally {
+      twitterHtmlWorkerBusy = false;
+      if (twitterHtmlJobs.length) kickTwitterHtmlWorker();
+    }
+  })().catch((e) => {
+    twitterHtmlWorkerBusy = false;
+    console.warn("[mint-radar] twitter html worker:", e?.message || e);
+  });
 }
 
 async function fillTwitterFromHtml(contract, slugHint) {
   const c = String(contract || "").toLowerCase();
   const meta = getMeta(c);
   if (meta.twitter) return;
+  meta.twitterHtmlTriedAt = Date.now();
   try {
     const scraped = await enrichFromOpenSeaHtml(c, slugHint || meta.slug);
-    if (!scraped?.twitter) return;
+    if (!scraped?.twitter) {
+      meta.twitterHtmlMiss = true;
+      return;
+    }
     meta.twitter = scraped.twitter;
+    meta.twitterHtmlMiss = false;
     if (scraped.slug) meta.slug = scraped.slug;
     if (scraped.opensea) meta.opensea = scraped.opensea;
     if (scraped.icon && !meta.icon) meta.icon = scraped.icon;
@@ -933,6 +1132,7 @@ async function fillTwitterFromHtml(contract, slugHint) {
       meta.status = "ok";
     }
   } catch (e) {
+    meta.twitterHtmlMiss = true;
     if (!String(e?.message || "").includes("HTTP 404")) {
       console.warn(
         `[mint-radar] twitter html ${short(c)}:`,
@@ -1078,7 +1278,7 @@ async function enrichFromOpenSea(contract) {
         discord: col?.discord_url || null,
         telegram: col?.telegram_url || null,
         website: col?.project_url || null,
-        description: col?.description || null,
+        description: clipText(col?.description, 280),
         slug,
         opensea:
           col?.opensea_url ||
@@ -1175,7 +1375,8 @@ async function enrichOne(contract) {
       meta.discord = got.discord || meta.discord || null;
       meta.telegram = got.telegram || meta.telegram || null;
       meta.website = got.website || meta.website || null;
-      meta.description = got.description || meta.description || null;
+      meta.description =
+        clipText(got.description, 280) || clipText(meta.description, 280);
       meta.slug = got.slug || meta.slug || null;
       meta.opensea = got.opensea || meta.opensea;
       meta.source = got.source || meta.source;
@@ -1191,6 +1392,7 @@ async function enrichOne(contract) {
       meta.status = meta.icon || meta.twitter || meta.discord ? "ok" : "miss";
       await enrichMaxSupply(meta, contract);
       meta.updatedAt = Date.now();
+      trimMetaCache();
       return meta;
     }
 
@@ -1387,6 +1589,8 @@ function trimEvents() {
     eventOrder.shift();
     eventMap.delete(k);
   }
+  // After event eviction, drop cold collection meta so heap does not grow overnight
+  if (metaCache.size > META_CACHE_MAX) trimMetaCache();
 }
 
 function ingestItems(items) {
@@ -1987,6 +2191,7 @@ function rememberMintedOut(row) {
   ) {
     setTimeout(() => refreshTradeVolumeForContract(c).catch(() => {}), 0);
   }
+  trimMintedOutArchive();
   scheduleSaveMintedOutArchive();
 }
 
@@ -2071,33 +2276,50 @@ export function getMintSnapshot(opts = {}) {
   const hot15 = excludeMintedOutRows(aggregate(15 * 60 * 1000)).slice(0, 10);
   const mintedOut = wantMintedOutPayload ? collectMintedOut(outLimit) : [];
 
+  // Single scan of the event store for feed + window stats (avoid 4× full copies)
+  const all = allEvents();
+  const now = Date.now();
+  let mints1m = 0;
+  let mints5m = 0;
+  let mints10m = 0;
+  let mints15m = 0;
+  let mints30m = 0;
+  let priceKnownEvents = 0;
+  /** @type {Set<string>} */
+  const collections5mSet = new Set();
+  const from1 = now - 60_000;
+  const from5 = now - 5 * 60_000;
+  const from10 = now - 10 * 60_000;
+  const from15 = now - 15 * 60_000;
+  const from30 = now - 30 * 60_000;
+  for (const e of all) {
+    if (e?.unitPriceWei != null) priceKnownEvents += 1;
+    const ts = e?.ts;
+    if (ts == null || !Number.isFinite(ts)) continue;
+    if (ts >= from1) mints1m += 1;
+    if (ts >= from5) {
+      mints5m += 1;
+      if (e.contract) collections5mSet.add(e.contract);
+    }
+    if (ts >= from10) mints10m += 1;
+    if (ts >= from15) mints15m += 1;
+    if (ts >= from30) mints30m += 1;
+  }
+  const collections5m = collections5mSet.size;
+
   /** @type {Set<string>} */
   const feedPriceDone = new Set();
-  const events = allEvents()
-    .slice()
-    .reverse()
-    .slice(0, feedLimit)
-    .map((e) => {
-      hydrateEventPrice(e, feedPriceDone);
-      return attachMetaFields(e);
-    });
+  const feedStart = Math.max(0, all.length - feedLimit);
+  const events = [];
+  for (let i = all.length - 1; i >= feedStart; i -= 1) {
+    const e = all[i];
+    hydrateEventPrice(e, feedPriceDone);
+    events.push(attachMetaFields(e));
+  }
 
-  const now = Date.now();
-  const mints1m = countMintsInWindow(60_000, now);
-  const mints5m = countMintsInWindow(5 * 60_000, now);
-  const mints10m = countMintsInWindow(10 * 60_000, now);
-  const mints15m = countMintsInWindow(15 * 60_000, now);
-  const mints30m = countMintsInWindow(30 * 60_000, now);
-  const collections5m = new Set(
-    allEvents()
-      .filter((e) => e.ts >= now - 5 * 60_000)
-      .map((e) => e.contract)
-  ).size;
-
-  const metaOk = [...metaCache.values()].filter((m) => m.status === "ok").length;
-  let priceKnownEvents = 0;
-  for (const e of allEvents()) {
-    if (e.unitPriceWei != null) priceKnownEvents += 1;
+  let metaOk = 0;
+  for (const m of metaCache.values()) {
+    if (m.status === "ok") metaOk += 1;
   }
 
   return {
@@ -2129,6 +2351,9 @@ export function getMintSnapshot(opts = {}) {
       priceKnownEvents,
       rateLimited: rateLimitUntil > Date.now(),
       rateLimitRemainMs: Math.max(0, rateLimitUntil - Date.now()),
+      memory: processMemoryStats(),
+      openSeaHtmlInFlight,
+      twitterHtmlQueue: twitterHtmlJobs.length,
       /** Structured diagnosis for UI alert banner */
       health: computeHealth(),
     },
@@ -2271,8 +2496,12 @@ export async function refreshMintedOutTradeVolumes({ force = true } = {}) {
 export function startMintRadar() {
   if (pollTimer) return;
   loadMintedOutArchive();
+  trimMintedOutArchive();
   console.log("[mint-radar] starting (Blockscout poll)");
   console.log(`[mint-radar] DATA_DIR=${DATA_DIR}`);
+  console.log(
+    `[mint-radar] memory guards: events≤${MAX_EVENTS} meta≤${META_CACHE_MAX} txPrice≤${TX_PRICE_CACHE_MAX} html≤${Math.round(OPENSEA_HTML_MAX_BYTES / 1024)}KB concurrent=${OPENSEA_HTML_MAX_CONCURRENT}`
+  );
   if (openSeaApiKey()) {
     console.log(
       "[mint-radar] OpenSea API key enabled (meta + minted-out 交易额)"
@@ -2286,6 +2515,15 @@ export function startMintRadar() {
       "[mint-radar] OPENSEA_API_KEY unset — Twitter via public OpenSea HTML; 交易额 needs key"
     );
   }
+  // Periodic RSS log — helps confirm overnight OOM risk before Railway kills us
+  setInterval(() => {
+    const mem = processMemoryStats();
+    if (mem.rssMb >= 350 || mem.heapUsedMb >= 250) {
+      console.warn(
+        `[mint-radar] memory high rss=${mem.rssMb}MB heap=${mem.heapUsedMb}MB store=${eventMap.size} meta=${metaCache.size} price=${txPriceCache.size} mintedOut=${mintedOutArchive.size}`
+      );
+    }
+  }, 5 * 60_000).unref?.();
   safePollOnce();
   pollTimer = setInterval(safePollOnce, POLL_MS);
 }
