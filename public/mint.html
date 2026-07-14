@@ -18,7 +18,7 @@
         }
       })();
     </script>
-    <link rel="stylesheet" href="/mint.css?v=44" />
+    <link rel="stylesheet" href="/mint.css?v=70" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -35,18 +35,18 @@
         <img class="logo" src="/brand/logo-mark.svg" width="48" height="48" alt="ROBIN NFT Radar" />
         <div>
           <h1 data-i18n="brandTitle">ROBIN NFT Radar</h1>
-          <p class="sub">
-            <span data-i18n="brandSub">Robinhood Chain · 实时铸造热度</span>
-            <a id="explorerLink" href="https://robinhoodchain.blockscout.com/" target="_blank" rel="noopener"
-              >Blockscout ↗</a
-            >
-            <span
+          <p class="sub sub-slim">
+            <span class="sub-tagline" data-i18n="brandSub">Robinhood Chain · 实时铸造热度</span>
+            <a
               id="blockscoutStatusChip"
               class="blockscout-status-chip"
+              href="https://robinhoodchain.blockscout.com/"
+              target="_blank"
+              rel="noopener noreferrer"
               hidden
               role="status"
               title=""
-            ></span>
+            ></a>
           </p>
         </div>
       </div>
@@ -60,33 +60,58 @@
             >Twitter</a
           >
           <span class="top-link-sep" aria-hidden="true">·</span>
+          <button type="button" class="top-link top-link-btn" id="btnOpenSea" data-i18n="openseaLink">
+            OpenSea
+          </button>
+          <span class="top-link-sep" aria-hidden="true">·</span>
+          <button type="button" class="top-link top-link-btn raffle-nav-btn" id="btnRaffle">
+            <span class="raffle-nav-label-wrap">
+              <span data-i18n="raffleLink">Whitelist</span>
+              <span class="raffle-unread-dot" id="raffleUnreadDot" hidden aria-hidden="true"></span>
+            </span>
+          </button>
+          <span class="top-link-sep" aria-hidden="true">·</span>
           <button type="button" class="top-link top-link-btn" id="btnUpdates" data-i18n="updatesLink">
-            更新
+            Updates
           </button>
         </nav>
-        <button
-          type="button"
-          class="toggle-btn"
-          id="themeToggle"
-          aria-label="Toggle theme"
-          title="Click to switch Light / Dark"
+        <div
+          class="toggle-pair"
+          role="group"
+          id="togglePair"
+          data-i18n-aria="toggleGroupLabel"
+          aria-label="主题与语言"
         >
-          Dark
-        </button>
-        <button
-          type="button"
-          class="toggle-btn"
-          id="langToggle"
-          aria-label="Toggle language"
-          title="Click to switch 中文 / EN"
-        >
-          中文
-        </button>
+          <button type="button" class="toggle-seg is-active" id="themeToggle">
+            <span class="toggle-seg-inner">
+              <span class="toggle-icon-wrap" id="themeToggleIcon" aria-hidden="true"></span>
+              <span class="toggle-seg-label" id="themeToggleLabel">深色</span>
+            </span>
+          </button>
+          <span class="toggle-pair-sep" aria-hidden="true"></span>
+          <button type="button" class="toggle-seg is-active" id="langToggle">
+            <span class="toggle-seg-inner">
+              <span class="toggle-seg-label" id="langToggleLabel">中文</span>
+            </span>
+          </button>
+        </div>
         <div class="wallet-wrap">
           <button type="button" class="wallet-btn" id="btnWallet" title="Connect Wallet">
             Connect Wallet
           </button>
           <div class="wallet-menu" id="walletMenu" hidden>
+            <div class="wallet-menu-head">
+              <span class="wallet-menu-label" data-i18n="walletMenuTitle">已连接</span>
+              <span class="wallet-menu-addr" id="walletMenuAddr"></span>
+            </div>
+            <div class="wallet-nft-block">
+              <div class="wallet-nft-head">
+                <span class="wallet-nft-label" data-i18n="walletNftsLabel">钱包 NFT</span>
+                <span class="wallet-nft-count" id="walletNftCount"></span>
+              </div>
+              <div class="wallet-nft-list hide-scrollbar" id="walletNftList"></div>
+              <p class="wallet-nft-status" id="walletNftStatus" hidden></p>
+            </div>
             <button type="button" class="wallet-menu-item" id="btnDisconnect" data-i18n="walletDisconnect">
               退出钱包
             </button>
@@ -107,7 +132,10 @@
             已屏蔽 · 0
           </button>
         </div>
-        <button type="button" class="btn" id="btnRefresh" data-i18n="refresh">立即刷新</button>
+        <div class="refresh-group">
+          <button type="button" class="btn" id="btnRefresh" data-i18n="refresh">立即刷新</button>
+          <span id="dataFreshness" class="data-freshness" aria-live="polite">等待数据…</span>
+        </div>
       </div>
     </section>
 
@@ -276,6 +304,95 @@
       <ul class="updates-list" id="updatesList"></ul>
     </div>
 
-    <script src="/mint.js?v=50"></script>
+    <!-- OpenSea explain modal — official community NFT / raffle credential -->
+    <div
+      class="os-modal"
+      id="openSeaModal"
+      hidden
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="openSeaModalTitle"
+    >
+      <div class="os-modal-backdrop" id="openSeaModalBackdrop" tabindex="-1"></div>
+      <div class="os-modal-card">
+        <button
+          type="button"
+          class="os-modal-close"
+          id="btnCloseOpenSea"
+          data-i18n-aria="openseaCloseAria"
+          aria-label="关闭"
+        >
+          ×
+        </button>
+        <div class="os-modal-badge" aria-hidden="true">OpenSea</div>
+        <h2 class="os-modal-title" id="openSeaModalTitle" data-i18n="openseaTitle">
+          铸造 ROBIN 官方 NFT
+        </h2>
+        <div class="os-modal-body">
+          <p data-i18n="openseaP1">
+            这是我们发行的社区会员凭证。在 Robinhood 链上通过 OpenSea 铸造后，即成为会员——无需额外登记。
+          </p>
+          <p data-i18n="openseaP2">会员权益：</p>
+          <ul class="os-modal-list">
+            <li data-i18n="openseaLi1">
+              白名单抽奖：持有官方 NFT 即可参与；按 token 编号抽取，持有越多中签概率越高，可赢取链上项目 guaranteed / FCFS 等白名单名额
+            </li>
+            <li data-i18n="openseaLi2">
+              中奖提醒：连接钱包后，若你的地址中奖，顶部「白名单」旁会出现红点通知
+            </li>
+            <li data-i18n="openseaLi3">
+              Alpha List：我们整理的优质项目情报源，仅对会员开放（需连接钱包且持有官方 NFT；内容系统筹备中）
+            </li>
+          </ul>
+          <p class="os-modal-note" data-i18n="openseaNote">
+            开奖规则详见顶部「白名单」。Alpha List 功能即将上线，届时会员可在站内查看。
+          </p>
+        </div>
+        <div class="os-modal-actions">
+          <a
+            class="btn os-modal-cta"
+            id="openSeaCta"
+            href="https://opensea.io/collection/supermax-mech"
+            target="_blank"
+            rel="noopener noreferrer"
+            data-i18n="openseaCta"
+            >去 OpenSea mint ↗</a
+          >
+        </div>
+      </div>
+    </div>
+
+    <!-- Whitelist raffle modal — periods / partners / winners -->
+    <div
+      class="os-modal raffle-modal"
+      id="raffleModal"
+      hidden
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="raffleModalTitle"
+    >
+      <div class="os-modal-backdrop" id="raffleModalBackdrop" tabindex="-1"></div>
+      <div class="os-modal-card raffle-modal-card">
+        <button
+          type="button"
+          class="os-modal-close"
+          id="btnCloseRaffle"
+          data-i18n-aria="raffleCloseAria"
+          aria-label="关闭"
+        >
+          ×
+        </button>
+        <h2 class="os-modal-title" id="raffleModalTitle" data-i18n="raffleTitle">
+          社区白名单抽奖
+        </h2>
+        <p class="raffle-rules" id="raffleRules"></p>
+        <div class="raffle-rounds" id="raffleRounds" role="list"></div>
+        <p class="raffle-empty" id="raffleEmpty" hidden data-i18n="raffleEmpty">
+          暂无抽奖期数
+        </p>
+      </div>
+    </div>
+
+    <script src="/mint.js?v=72"></script>
   </body>
 </html>

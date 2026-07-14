@@ -7,6 +7,13 @@
   const FAV_KEY = "mint-radar-favorites";
   const FAV_META_KEY = "mint-radar-favorites-meta";
   const PRICE_FILTER_KEY = "mint-radar-price-filter";
+  /** address -> { [roundKey]: true } — which win notices were opened */
+  const RAFFLE_READ_KEY = "mint-radar-raffle-read-v1";
+
+  /** ROBIN 官方社区 NFT — 更新为实际上线后的 OpenSea 铸造/合集页 */
+  const OFFICIAL_NFT = {
+    mintUrl: "https://opensea.io/collection/supermax-mech",
+  };
 
   const EYE_SLASH_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M2.1 3.51 3.51 2.1l18.38 18.39-1.41 1.41-3.1-3.1A11.4 11.4 0 0 1 12 19c-5 0-9.27-3.11-11-7.5a12.3 12.3 0 0 1 4.18-5.09L2.1 3.51zM12 7a5 5 0 0 1 5 5c0 .7-.14 1.36-.4 1.97l-1.57-1.57A2.99 2.99 0 0 0 12 9c-.4 0-.78.08-1.13.23L9.3 7.66A4.96 4.96 0 0 1 12 7zm0-5c5 0 9.27 3.11 11 7.5a12.48 12.48 0 0 1-4.05 5.04l-1.45-1.45A10.4 10.4 0 0 0 21.17 9.5 10.46 10.46 0 0 0 12 4c-1.08 0-2.12.16-3.1.46L7.35 2.9A12.3 12.3 0 0 1 12 2zM8.12 9.54 9.6 11A3 3 0 0 0 12 15c.36 0 .7-.06 1.02-.18l1.48 1.48A5 5 0 0 1 8.12 9.54z"/></svg>`;
   /* Outline star — stroke follows currentColor so light/dark themes flip black↔white */
@@ -18,6 +25,21 @@
    * Before any GitHub push: review new lines with the user first.
    */
   const UPDATES = [
+    {
+      date: "2026-07-14",
+      zh: "官方 NFT 上线：OpenSea 弹窗可直达 Supermax Mech 合集 mint",
+      en: "Official NFT live — OpenSea modal links to Supermax Mech collection mint",
+    },
+    {
+      date: "2026-07-14",
+      zh: "社区白名单模块：顶部 Whitelist 查看抽奖期数、中奖地址与钱包红点提醒",
+      en: "Community whitelist raffle — Whitelist tab, draw rounds, winners, wallet win alerts",
+    },
+    {
+      date: "2026-07-14",
+      zh: "钱包 NFT：连接钱包后可在菜单中读取 Robinhood 链持仓列表",
+      en: "Wallet NFTs — connected wallet menu shows your Robinhood chain holdings",
+    },
     {
       date: "2026-07-13",
       zh: "Blockscout 状态警示：正常显示绿色 Blockscout live；浏览器故障时红标提醒，并说明原因（可关闭）",
@@ -51,10 +73,55 @@
       title: "ROBIN NFT Radar · Robinhood Chain",
       brandTitle: "ROBIN NFT Radar",
       brandSub: "Robinhood Chain · 实时铸造热度",
-      updatesLink: "更新",
+      updatesLink: "Updates",
       updatesTitle: "最近更新",
       updatesClose: "关闭",
+      openseaLink: "OpenSea",
+      openseaTitle: "铸造 ROBIN 官方 NFT",
+      openseaP1:
+        "这是我们发行的社区会员凭证。在 Robinhood 链上通过 OpenSea 铸造后，即成为会员——无需额外登记。",
+      openseaP2: "会员权益：",
+      openseaLi1:
+        "白名单抽奖：持有官方 NFT 即可参与；按 token 编号抽取，持有越多中签概率越高，可赢取链上项目 guaranteed / FCFS 等白名单名额",
+      openseaLi2:
+        "中奖提醒：连接钱包后，若你的地址中奖，顶部「白名单」旁会出现红点通知",
+      openseaLi3:
+        "Alpha List：我们整理的优质项目情报源，仅对会员开放（需连接钱包且持有官方 NFT；内容系统筹备中）",
+      openseaNote:
+        "开奖规则详见顶部「白名单」。Alpha List 功能即将上线，届时会员可在站内查看。",
+      openseaCta: "去 OpenSea mint ↗",
+      openseaCloseAria: "关闭说明",
+      raffleLink: "Whitelist",
+      raffleTitle: "社区白名单抽奖",
+      raffleCloseAria: "关闭白名单抽奖",
+      raffleEmpty: "暂无抽奖期数",
+      rafflePeriod: (n) => `抽奖第 ${n} 期`,
+      raffleStatusDrawn: "已开奖",
+      raffleStatusPending: "待开奖",
+      raffleSpots: (n) => `${n} 个名额`,
+      raffleProjectLabel: "项目方",
+      raffleWlTypeLabel: "白名单类型",
+      raffleTwitterLabel: "Twitter",
+      raffleWinnersLabel: "中奖钱包地址",
+      rafflePendingHint: "尚未开奖 · 开奖后将在此公示地址",
+      raffleCopy: "复制",
+      raffleCopied: "已复制",
+      raffleLoadError: "抽奖数据加载失败，请稍后重试",
+      raffleLoading: "加载中…",
+      raffleDrawnAt: (s) => `开奖时间 ${s}`,
+      raffleWinHint:
+        "连接钱包后，若你的地址在某一期中奖，顶部「白名单」旁会出现红点提醒（点开后消失）。示例期会用你的地址演示中奖效果。",
+      raffleYouWon: "你中奖了",
+      raffleDemoBadge: "示例预览",
+      raffleUnreadAria: "有未读中奖通知",
       refresh: "立即刷新",
+      dataFreshness: (rel) => `更新于 ${rel}`,
+      dataFreshnessWaiting: "等待数据…",
+      toggleGroupLabel: "主题与语言",
+      themeLight: "浅色",
+      themeDark: "深色",
+      themeToggleTitle: "切换主题",
+      langToggleTitle: "切换语言",
       hotTitle: "🔥 铸造热榜",
       thCollection: "集合",
       th5m: "5 分钟",
@@ -137,6 +204,13 @@
       googleSearchTitle: "Google 搜图",
       walletDisconnect: "退出钱包",
       walletMenuTitle: "已连接",
+      walletNftsLabel: "钱包 NFT",
+      walletNftsLoading: "正在读取 NFT…",
+      walletNftsEmpty: "该地址暂无 NFT",
+      walletNftsError: "读取失败，请稍后重试",
+      walletNftsErrorDetail: (msg) => `读取失败：${msg}`,
+      walletNftsTruncated: (n) => `已显示 ${n} 个 · 可滚动查看`,
+      walletNftsCount: (n) => `${n} 个`,
       blockedBtn: (n) => `已屏蔽 · ${n}`,
       blockedTitle: "屏蔽列表",
       blockedClear: "全部取消",
@@ -161,7 +235,52 @@
       updatesLink: "Updates",
       updatesTitle: "Recent updates",
       updatesClose: "Close",
+      openseaLink: "OpenSea",
+      openseaTitle: "Mint the ROBIN Official NFT",
+      openseaP1:
+        "Our official membership pass. Mint on Robinhood Chain via OpenSea to become a member — no extra signup.",
+      openseaP2: "Member benefits:",
+      openseaLi1:
+        "WL raffles — hold the official NFT to enter; random token IDs each round, more NFTs = better odds, win guaranteed / FCFS spots from on-chain projects",
+      openseaLi2:
+        "Win alerts — connect your wallet; a red dot appears next to Whitelist when you win",
+      openseaLi3:
+        "Alpha List — curated project intel for members only (wallet + official NFT required; content system coming soon)",
+      openseaNote:
+        "See Whitelist for draw rules. Alpha List launches soon for members on-site.",
+      openseaCta: "Mint on OpenSea ↗",
+      openseaCloseAria: "Close",
+      raffleLink: "Whitelist",
+      raffleTitle: "Community WL Raffle",
+      raffleCloseAria: "Close whitelist raffle",
+      raffleEmpty: "No raffle rounds yet",
+      rafflePeriod: (n) => `Round ${n}`,
+      raffleStatusDrawn: "Drawn",
+      raffleStatusPending: "Pending",
+      raffleSpots: (n) => `${n} spots`,
+      raffleProjectLabel: "Partner",
+      raffleWlTypeLabel: "WL type",
+      raffleTwitterLabel: "Twitter",
+      raffleWinnersLabel: "Winning wallets",
+      rafflePendingHint: "Not drawn yet — winners will be listed here",
+      raffleCopy: "Copy",
+      raffleCopied: "Copied",
+      raffleLoadError: "Failed to load raffle data",
+      raffleLoading: "Loading…",
+      raffleDrawnAt: (s) => `Drawn ${s}`,
+      raffleWinHint:
+        "Connect your wallet — a red dot appears on Whitelist when you win (clears after you open it). Demo rounds preview the win UI with your address.",
+      raffleYouWon: "You won",
+      raffleDemoBadge: "Demo",
+      raffleUnreadAria: "Unread win notification",
       refresh: "Refresh",
+      dataFreshness: (rel) => `Updated ${rel}`,
+      dataFreshnessWaiting: "Waiting for data…",
+      toggleGroupLabel: "Theme and language",
+      themeLight: "Light",
+      themeDark: "Dark",
+      themeToggleTitle: "Switch theme",
+      langToggleTitle: "Switch language",
       hotTitle: "🔥 Mint Leaderboard",
       thCollection: "Collection",
       th5m: "5 min",
@@ -244,6 +363,13 @@
       googleSearchTitle: "Google image search",
       walletDisconnect: "Disconnect",
       walletMenuTitle: "Connected",
+      walletNftsLabel: "Wallet NFTs",
+      walletNftsLoading: "Loading NFTs…",
+      walletNftsEmpty: "No NFTs in this wallet",
+      walletNftsError: "Failed to load NFTs",
+      walletNftsErrorDetail: (msg) => `Failed: ${msg}`,
+      walletNftsTruncated: (n) => `Showing ${n} · scroll for more`,
+      walletNftsCount: (n) => `${n}`,
       blockedBtn: (n) => `Blocked · ${n}`,
       blockedTitle: "Blocked list",
       blockedClear: "Unblock all",
@@ -351,7 +477,12 @@
     dataHealthDismiss: $("dataHealthDismiss"),
     dataHealthLink: $("dataHealthLink"),
     blockscoutStatusChip: $("blockscoutStatusChip"),
+    dataFreshness: $("dataFreshness"),
   };
+
+  /** Last successful client poll (UI refresh) timestamp */
+  let lastDataRefreshAt = null;
+  let freshnessTicker = null;
 
   /** User dismissed the current health code — re-show if code changes */
   let healthDismissedCode = null;
@@ -380,6 +511,11 @@
 
   /** Injected wallet (MetaMask etc.) — UI only for now, no trades */
   const RH_CHAIN_HEX = "0x1237"; // 4663
+
+  const TOGGLE_ICON_SUN =
+    '<svg class="toggle-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4" fill="currentColor"/><g class="sun-rays" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m4.93 19.07 1.41-1.41"/><path d="m17.66 6.34 1.41-1.41"/></g></svg>';
+  const TOGGLE_ICON_MOON =
+    '<svg class="toggle-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round" d="M21 12.79A9 9 0 1 1 11.21 3 6.5 6.5 0 0 0 21 12.79z"/></svg>';
   /** @type {string|null} */
   let walletAddress = null;
   let walletBusy = false;
@@ -694,6 +830,25 @@
     updateFavoritesUi();
     renderUpdatesList();
     syncPriceFilterUi();
+    if (typeof window.__renderRaffleModal === "function") {
+      window.__renderRaffleModal();
+    }
+    if (isWalletMenuOpen()) renderWalletNfts();
+    updateDataFreshnessUi();
+  }
+
+  function updateDataFreshnessUi() {
+    const el = els.dataFreshness;
+    if (!el) return;
+    el.classList.remove("is-stale");
+    if (!lastDataRefreshAt) {
+      el.textContent = t("dataFreshnessWaiting");
+      return;
+    }
+    const rel = relTime(new Date(lastDataRefreshAt).toISOString());
+    el.textContent = t("dataFreshness", rel);
+    const ageSec = (Date.now() - lastDataRefreshAt) / 1000;
+    if (ageSec > 20) el.classList.add("is-stale");
   }
 
   function renderUpdatesList() {
@@ -710,12 +865,29 @@
 
   function syncThemeToggle() {
     const btn = document.getElementById("themeToggle");
-    if (btn) btn.textContent = theme === "light" ? "Light" : "Dark";
+    const label = document.getElementById("themeToggleLabel");
+    const icon = document.getElementById("themeToggleIcon");
+    if (!btn) return;
+    const isLight = theme === "light";
+    const name = t(isLight ? "themeLight" : "themeDark");
+    if (label) label.textContent = name;
+    if (icon) icon.innerHTML = isLight ? TOGGLE_ICON_SUN : TOGGLE_ICON_MOON;
+    btn.classList.add("is-active");
+    const hint = t("themeToggleTitle");
+    btn.setAttribute("aria-label", hint);
+    btn.title = `${hint} · ${name}`;
   }
 
   function syncLangToggle() {
     const btn = document.getElementById("langToggle");
-    if (btn) btn.textContent = lang === "en" ? "EN" : "中文";
+    const label = document.getElementById("langToggleLabel");
+    if (!btn) return;
+    const name = lang === "en" ? "EN" : "中文";
+    if (label) label.textContent = name;
+    btn.classList.add("is-active");
+    const hint = t("langToggleTitle");
+    btn.setAttribute("aria-label", hint);
+    btn.title = `${hint} · ${name}`;
   }
 
   function applyThemeUi() {
@@ -769,6 +941,10 @@
 
   let walletMenuOpen = false;
   let walletMenuIgnoreOutsideUntil = 0;
+  /** @type {{ address: string, items: any[], truncated: boolean, error: string|null } | null} */
+  let walletNftCache = null;
+  let walletNftLoading = false;
+  let walletNftReqId = 0;
 
   /** Connect label English-only; disconnect follows UI language. */
   function syncWalletBtn() {
@@ -797,6 +973,172 @@
     return walletMenuOpen && menu && !menu.hidden;
   }
 
+  function setWalletNftStatus(text, show) {
+    const el = $("walletNftStatus");
+    if (!el) return;
+    if (!show || !text) {
+      el.hidden = true;
+      el.textContent = "";
+      return;
+    }
+    el.hidden = false;
+    el.textContent = text;
+  }
+
+  /** Skip huge inline data URLs — they stall innerHTML for large wallets */
+  function walletNftThumbSrc(image) {
+    if (!image) return null;
+    const s = String(image);
+    if (s.startsWith("data:") && s.length > 400) return null;
+    return s;
+  }
+
+  function renderWalletNfts() {
+    const list = $("walletNftList");
+    const countEl = $("walletNftCount");
+    const addrEl = $("walletMenuAddr");
+    if (addrEl) {
+      addrEl.textContent = walletAddress || "—";
+      addrEl.title = walletAddress || "";
+    }
+    if (!list) return;
+
+    if (!walletAddress) {
+      list.innerHTML = "";
+      if (countEl) countEl.textContent = "";
+      setWalletNftStatus("", false);
+      return;
+    }
+
+    if (walletNftLoading) {
+      list.innerHTML = "";
+      if (countEl) countEl.textContent = "";
+      setWalletNftStatus(t("walletNftsLoading"), true);
+      return;
+    }
+
+    if (walletNftCache?.error && walletNftCache.address === walletAddress) {
+      list.innerHTML = "";
+      if (countEl) countEl.textContent = "";
+      const errMsg = String(walletNftCache.error || "").trim();
+      setWalletNftStatus(
+        errMsg ? t("walletNftsErrorDetail", errMsg) : t("walletNftsError"),
+        true
+      );
+      return;
+    }
+
+    const items =
+      walletNftCache && walletNftCache.address === walletAddress
+        ? walletNftCache.items || []
+        : [];
+    if (countEl) {
+      countEl.textContent = items.length ? t("walletNftsCount", items.length) : "";
+    }
+    if (!items.length) {
+      list.innerHTML = "";
+      setWalletNftStatus(
+        walletNftLoading ? t("walletNftsLoading") : t("walletNftsEmpty"),
+        true
+      );
+      return;
+    }
+
+    list.innerHTML = items
+      .map((nft) => {
+        // Always open OpenSea (item page), not Blockscout
+        const href =
+          nft.opensea ||
+          (nft.contract && nft.tokenId != null && nft.tokenId !== ""
+            ? `https://opensea.io/item/robinhood/${nft.contract}/${nft.tokenId}`
+            : nft.contract
+              ? `https://opensea.io/contract/robinhood/${nft.contract}`
+              : "#");
+        const name = ellipsize(String(nft.name || "NFT"), 28);
+        const subParts = [];
+        if (nft.collection) subParts.push(ellipsize(String(nft.collection), 18));
+        if (nft.tokenId != null && nft.tokenId !== "") subParts.push(`#${nft.tokenId}`);
+        const sub = subParts.join(" · ") || short(nft.contract || "");
+        const thumb = walletNftThumbSrc(nft.image);
+        const img = thumb
+          ? `<img class="wallet-nft-thumb" src="${escapeHtml(thumb)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'wallet-nft-thumb ph','aria-hidden':'true',textContent:'NFT'}))" />`
+          : `<span class="wallet-nft-thumb ph" aria-hidden="true">NFT</span>`;
+        return `<a class="wallet-nft-item" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" title="OpenSea · ${escapeHtml(
+          String(nft.name || "")
+        )}">
+          ${img}
+          <span class="wallet-nft-meta">
+            <span class="wallet-nft-name">${escapeHtml(name)}</span>
+            <span class="wallet-nft-sub">${escapeHtml(sub)}</span>
+          </span>
+        </a>`;
+      })
+      .join("");
+
+    if (walletNftCache?.truncated) {
+      setWalletNftStatus(t("walletNftsTruncated", items.length), true);
+    } else {
+      setWalletNftStatus("", false);
+    }
+  }
+
+  async function loadWalletNfts(force) {
+    if (!walletAddress) {
+      walletNftCache = null;
+      renderWalletNfts();
+      return;
+    }
+    if (
+      !force &&
+      walletNftCache &&
+      walletNftCache.address === walletAddress &&
+      !walletNftCache.error
+    ) {
+      renderWalletNfts();
+      return;
+    }
+    const reqId = ++walletNftReqId;
+    const addr = walletAddress;
+    walletNftLoading = true;
+    renderWalletNfts();
+    try {
+      const res = await fetch(
+        `/api/wallet/nfts?address=${encodeURIComponent(addr)}`,
+        { cache: "no-store", signal: AbortSignal.timeout(45000) }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (reqId !== walletNftReqId || walletAddress !== addr) return;
+      if (!res.ok || data.ok === false) {
+        walletNftCache = {
+          address: addr,
+          items: [],
+          truncated: false,
+          error: data.error || `HTTP ${res.status}`,
+        };
+      } else {
+        walletNftCache = {
+          address: addr,
+          items: Array.isArray(data.items) ? data.items : [],
+          truncated: !!data.truncated,
+          error: null,
+        };
+      }
+    } catch (e) {
+      if (reqId !== walletNftReqId || walletAddress !== addr) return;
+      walletNftCache = {
+        address: addr,
+        items: [],
+        truncated: false,
+        error: e?.message || String(e),
+      };
+    } finally {
+      if (reqId === walletNftReqId) {
+        walletNftLoading = false;
+        renderWalletNfts();
+      }
+    }
+  }
+
   function openWalletMenu() {
     const menu = $("walletMenu");
     const btn = els.btnWallet;
@@ -807,6 +1149,8 @@
     menu.classList.add("is-open");
     btn.setAttribute("aria-expanded", "true");
     walletMenuIgnoreOutsideUntil = Date.now() + 200;
+    renderWalletNfts();
+    loadWalletNfts(true);
   }
 
   function closeWalletMenu() {
@@ -832,8 +1176,13 @@
   async function disconnectWallet() {
     const eth = getEthereum();
     walletAddress = null;
+    walletNftCache = null;
+    walletNftReqId += 1;
     closeWalletMenu();
     syncWalletBtn();
+    if (typeof window.__onRaffleWalletChange === "function") {
+      window.__onRaffleWalletChange();
+    }
     // Best-effort full revoke (MetaMask etc.); not all wallets support it
     try {
       if (eth && eth.request) {
@@ -894,6 +1243,9 @@
         // Best-effort; does not block if user stays on another chain
         trySwitchRobinhood(eth).catch(() => {});
       }
+      if (typeof window.__onRaffleWalletChange === "function") {
+        window.__onRaffleWalletChange();
+      }
     } catch (e) {
       const code = e && e.code;
       if (code === 4001) {
@@ -905,6 +1257,9 @@
     } finally {
       walletBusy = false;
       syncWalletBtn();
+      if (typeof window.__onRaffleWalletChange === "function") {
+        window.__onRaffleWalletChange();
+      }
     }
   }
 
@@ -925,8 +1280,14 @@
     eth.on("accountsChanged", (accs) => {
       const next = accs && accs[0] ? String(accs[0]).toLowerCase() : null;
       walletAddress = next;
+      walletNftCache = null;
+      walletNftReqId += 1;
       if (!walletAddress) closeWalletMenu();
+      else if (isWalletMenuOpen()) loadWalletNfts(true);
       syncWalletBtn();
+      if (typeof window.__onRaffleWalletChange === "function") {
+        window.__onRaffleWalletChange();
+      }
     });
     eth.on("chainChanged", () => {
       // UI-only; no reload required for radar
@@ -965,6 +1326,9 @@
       if (accounts && accounts[0]) {
         walletAddress = String(accounts[0]).toLowerCase();
         syncWalletBtn();
+        if (typeof window.__onRaffleWalletChange === "function") {
+          window.__onRaffleWalletChange();
+        }
       }
     } catch {
       /* ignore */
@@ -1867,6 +2231,7 @@
       mintedOutBootstrapped = true;
 
       lastData = data;
+      lastDataRefreshAt = Date.now();
       // 已铸完: renderMintedOut only paints when contract set changes (no 4s DOM thrash)
       renderAll(data, { forceMintedOut: false });
     } catch (e) {
@@ -1886,6 +2251,8 @@
           storeSize: 0,
         });
       }
+    } finally {
+      updateDataFreshnessUi();
     }
   }
 
@@ -2215,6 +2582,548 @@
     window.addEventListener("scroll", positionFavoritesPanel, true);
   })();
 
+  // Whitelist raffle modal (periods / partner / WL type / Twitter / winners + win badge)
+  (function bindRaffleModal() {
+    const btn = $("btnRaffle");
+    const modal = $("raffleModal");
+    const backdrop = $("raffleModalBackdrop");
+    const btnClose = $("btnCloseRaffle");
+    const rulesEl = $("raffleRules");
+    const listEl = $("raffleRounds");
+    const emptyEl = $("raffleEmpty");
+    const unreadDot = $("raffleUnreadDot");
+    if (!btn || !modal || !listEl) return;
+
+    if (modal.parentElement !== document.body) {
+      document.body.appendChild(modal);
+    }
+
+    let open = false;
+    let lastFocus = null;
+    let cache = null;
+    let loading = false;
+
+    function normAddr(a) {
+      return String(a || "").trim().toLowerCase();
+    }
+
+    function roundKey(round) {
+      if (round?.id != null && String(round.id).trim()) {
+        return String(round.id).trim().toLowerCase();
+      }
+      return `period-${Number(round?.period) || 0}`;
+    }
+
+    function loadReadMap() {
+      try {
+        const raw = localStorage.getItem(RAFFLE_READ_KEY);
+        const data = raw ? JSON.parse(raw) : {};
+        return data && typeof data === "object" ? data : {};
+      } catch {
+        return {};
+      }
+    }
+
+    function saveReadMap(map) {
+      try {
+        localStorage.setItem(RAFFLE_READ_KEY, JSON.stringify(map || {}));
+      } catch {
+        /* ignore */
+      }
+    }
+
+    function isDemoRound(round) {
+      return (
+        round?.demo === true ||
+        round?.demo === 1 ||
+        String(round?.demo || "").toLowerCase() === "true"
+      );
+    }
+
+    /**
+     * Demo rounds: after wallet connect, put viewer address first in winners
+     * so everyone can see red-dot / "you won" UI without a real draw.
+     * Real (non-demo) rounds are never rewritten.
+     */
+    function decorateRoundsForViewer(rounds, address) {
+      const a = normAddr(address);
+      if (!Array.isArray(rounds)) return [];
+      if (!a) return rounds.slice();
+      return rounds.map((round) => {
+        if (!isDemoRound(round)) return round;
+        if (String(round?.status || "").toLowerCase() !== "drawn") return round;
+        const raw = Array.isArray(round.winners) ? round.winners.filter(Boolean) : [];
+        const rest = raw.filter((w) => normAddr(w) !== a);
+        return {
+          ...round,
+          winners: [a, ...rest],
+          _demoPreview: true,
+        };
+      });
+    }
+
+    function viewerRounds() {
+      return decorateRoundsForViewer(
+        Array.isArray(cache?.rounds) ? cache.rounds : [],
+        walletAddress
+      );
+    }
+
+    function isRoundWinner(round, address) {
+      const a = normAddr(address);
+      if (!a) return false;
+      if (String(round?.status || "").toLowerCase() !== "drawn") return false;
+      const winners = Array.isArray(round?.winners) ? round.winners : [];
+      return winners.some((w) => normAddr(w) === a);
+    }
+
+    function unreadWinKeys(address, rounds) {
+      const a = normAddr(address);
+      if (!a || !Array.isArray(rounds)) return [];
+      const map = loadReadMap();
+      const read = map[a] && typeof map[a] === "object" ? map[a] : {};
+      const keys = [];
+      for (const round of rounds) {
+        if (!isRoundWinner(round, a)) continue;
+        const k = roundKey(round);
+        if (!read[k]) keys.push(k);
+      }
+      return keys;
+    }
+
+    function markWinsRead(address, rounds) {
+      const a = normAddr(address);
+      if (!a || !Array.isArray(rounds)) return;
+      const map = loadReadMap();
+      if (!map[a] || typeof map[a] !== "object") map[a] = {};
+      let changed = false;
+      for (const round of rounds) {
+        if (!isRoundWinner(round, a)) continue;
+        const k = roundKey(round);
+        if (!map[a][k]) {
+          map[a][k] = true;
+          changed = true;
+        }
+      }
+      if (changed) saveReadMap(map);
+    }
+
+    function syncUnreadBadge() {
+      const rounds = viewerRounds();
+      const unread = walletAddress ? unreadWinKeys(walletAddress, rounds) : [];
+      const has = unread.length > 0;
+      if (unreadDot) {
+        unreadDot.hidden = !has;
+        unreadDot.setAttribute("aria-hidden", has ? "false" : "true");
+      }
+      btn.classList.toggle("has-raffle-unread", has);
+      if (has) {
+        btn.setAttribute("aria-label", `${t("raffleLink")} · ${t("raffleUnreadAria")}`);
+        btn.title = t("raffleUnreadAria");
+      } else {
+        btn.removeAttribute("aria-label");
+        btn.removeAttribute("title");
+      }
+    }
+
+    function wlTypeLabel(round) {
+      if (lang === "en") {
+        return (
+          round.wlTypeEn ||
+          round.wlTypeZh ||
+          round.wlType ||
+          "—"
+        );
+      }
+      return (
+        round.wlTypeZh ||
+        round.wlTypeEn ||
+        round.wlType ||
+        "—"
+      );
+    }
+
+    function formatDrawnAt(iso) {
+      if (!iso) return "";
+      try {
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return String(iso);
+        return d.toLocaleString(lang === "zh" ? "zh-CN" : "en-US", {
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+      } catch {
+        return String(iso);
+      }
+    }
+
+    function twitterHref(url) {
+      const u = String(url || "").trim();
+      if (!u) return "";
+      if (/^https?:\/\//i.test(u)) return u;
+      if (u.startsWith("@")) return `https://x.com/${u.slice(1)}`;
+      if (/^x\.com\//i.test(u) || /^twitter\.com\//i.test(u)) return `https://${u}`;
+      return `https://x.com/${u.replace(/^\/+/, "")}`;
+    }
+
+    function twitterDisplay(url) {
+      const u = String(url || "").trim();
+      if (!u) return "";
+      try {
+        const href = twitterHref(u);
+        const path = new URL(href).pathname.replace(/\/$/, "");
+        if (path && path !== "/") return `@${path.replace(/^\//, "").split("/")[0]}`;
+      } catch {
+        /* fall through */
+      }
+      return u.startsWith("@") ? u : u;
+    }
+
+    async function copyText(text, btnEl) {
+      const value = String(text || "");
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(value);
+        } else {
+          const ta = document.createElement("textarea");
+          ta.value = value;
+          ta.setAttribute("readonly", "");
+          ta.style.position = "fixed";
+          ta.style.left = "-9999px";
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand("copy");
+          document.body.removeChild(ta);
+        }
+        if (btnEl) {
+          const prev = btnEl.textContent;
+          btnEl.textContent = t("raffleCopied");
+          setTimeout(() => {
+            btnEl.textContent = prev || t("raffleCopy");
+          }, 1200);
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    function renderRound(round) {
+      const period = Number(round.period) || 0;
+      const spots = Number(round.spots);
+      const status = String(round.status || "").toLowerCase() === "drawn" ? "drawn" : "pending";
+      const winners = Array.isArray(round.winners) ? round.winners.filter(Boolean) : [];
+      const tw = twitterHref(round.projectTwitter || round.twitter || "");
+      const note =
+        lang === "en"
+          ? round.noteEn || round.noteZh || ""
+          : round.noteZh || round.noteEn || "";
+      const drawnLabel = formatDrawnAt(round.drawnAt);
+      const youWon = isRoundWinner(round, walletAddress);
+      const me = normAddr(walletAddress);
+      const isDemo = isDemoRound(round);
+
+      const winnersHtml =
+        status === "drawn" && winners.length
+          ? `<div class="raffle-winners-head">
+              <span class="raffle-winners-label">${escapeHtml(t("raffleWinnersLabel"))}${
+                drawnLabel ? ` · ${escapeHtml(t("raffleDrawnAt", drawnLabel))}` : ""
+              }</span>
+            </div>
+            <ul class="raffle-winner-list">
+              ${winners
+                .map((addr, i) => {
+                  const isMe = me && normAddr(addr) === me;
+                  return `<li class="${isMe ? "is-me" : ""}">
+                    <span class="raffle-winner-idx">${i + 1}.</span>
+                    <span class="raffle-winner-addr" title="${escapeHtml(addr)}">${escapeHtml(addr)}</span>
+                    <button type="button" class="raffle-winner-copy" data-copy="${escapeHtml(addr)}">${escapeHtml(
+                      t("raffleCopy")
+                    )}</button>
+                  </li>`;
+                })
+                .join("")}
+            </ul>`
+          : `<div class="raffle-pending-box">${escapeHtml(t("rafflePendingHint"))}</div>`;
+
+      return `<article class="raffle-round${youWon ? " is-you-won" : ""}${isDemo ? " is-demo" : ""}" role="listitem" data-period="${period}">
+        <div class="raffle-round-head">
+          <div class="raffle-round-title">
+            <span class="raffle-period">${escapeHtml(t("rafflePeriod", period))}</span>
+            <span class="raffle-status ${status === "drawn" ? "is-drawn" : "is-pending"}">${escapeHtml(
+              status === "drawn" ? t("raffleStatusDrawn") : t("raffleStatusPending")
+            )}</span>
+            ${isDemo ? `<span class="raffle-demo-badge">${escapeHtml(t("raffleDemoBadge"))}</span>` : ""}
+            ${youWon ? `<span class="raffle-you-won">${escapeHtml(t("raffleYouWon"))}</span>` : ""}
+          </div>
+          <span class="raffle-spots">${escapeHtml(
+            Number.isFinite(spots) ? t("raffleSpots", spots) : ""
+          )}</span>
+        </div>
+        <div class="raffle-meta">
+          <div class="raffle-meta-row">
+            <span class="raffle-meta-label">${escapeHtml(t("raffleProjectLabel"))}</span>
+            <span class="raffle-project">${escapeHtml(round.project || "—")}</span>
+            <span class="raffle-wl-type" title="${escapeHtml(t("raffleWlTypeLabel"))}">${escapeHtml(
+              wlTypeLabel(round)
+            )}</span>
+          </div>
+          <div class="raffle-meta-row">
+            <span class="raffle-meta-label">${escapeHtml(t("raffleTwitterLabel"))}</span>
+            ${
+              tw
+                ? `<a class="raffle-twitter" href="${escapeHtml(tw)}" target="_blank" rel="noopener noreferrer">${escapeHtml(
+                    twitterDisplay(round.projectTwitter || round.twitter || tw)
+                  )} ↗</a>`
+                : `<span class="raffle-project">—</span>`
+            }
+          </div>
+        </div>
+        ${note ? `<p class="raffle-note">${escapeHtml(note)}</p>` : ""}
+        ${winnersHtml}
+      </article>`;
+    }
+
+    function render() {
+      if (rulesEl) {
+        if (cache?.rules) {
+          rulesEl.textContent =
+            lang === "en"
+              ? cache.rules.en || cache.rules.zh || ""
+              : cache.rules.zh || cache.rules.en || "";
+          rulesEl.hidden = !rulesEl.textContent;
+        } else if (loading) {
+          rulesEl.textContent = t("raffleLoading");
+          rulesEl.hidden = false;
+        } else {
+          rulesEl.textContent = "";
+          rulesEl.hidden = true;
+        }
+      }
+      const rounds = viewerRounds();
+      if (!rounds.length) {
+        listEl.innerHTML = "";
+        if (emptyEl) {
+          emptyEl.hidden = loading;
+          emptyEl.textContent = loading ? t("raffleLoading") : t("raffleEmpty");
+        }
+        syncUnreadBadge();
+        return;
+      }
+      if (emptyEl) emptyEl.hidden = true;
+      listEl.innerHTML = rounds.map(renderRound).join("");
+      syncUnreadBadge();
+    }
+
+    window.__renderRaffleModal = render;
+    window.__syncRaffleWinBadge = syncUnreadBadge;
+
+    async function load(force) {
+      if (loading) return;
+      if (cache && !force) {
+        render();
+        return;
+      }
+      loading = true;
+      render();
+      try {
+        const res = await fetch("/api/raffles", { cache: "no-store" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        cache = {
+          rules: data.rules || null,
+          rounds: Array.isArray(data.rounds) ? data.rounds : [],
+        };
+      } catch (e) {
+        console.warn("[raffle]", e);
+        if (!cache) {
+          cache = { rules: null, rounds: [] };
+          if (rulesEl) {
+            rulesEl.textContent = t("raffleLoadError");
+            rulesEl.hidden = false;
+          }
+        }
+      } finally {
+        loading = false;
+        render();
+      }
+    }
+
+    function close() {
+      if (!open) return;
+      open = false;
+      modal.hidden = true;
+      document.body.classList.remove("os-modal-open");
+      btn.setAttribute("aria-expanded", "false");
+      if (lastFocus && typeof lastFocus.focus === "function") {
+        try {
+          lastFocus.focus();
+        } catch {
+          /* ignore */
+        }
+      }
+      lastFocus = null;
+    }
+
+    async function show(ev) {
+      if (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+      }
+      lastFocus = document.activeElement;
+      open = true;
+      modal.hidden = false;
+      document.body.classList.add("os-modal-open");
+      btn.setAttribute("aria-expanded", "true");
+      await load(true);
+      // Opening the panel counts as reading all current win notices for this wallet
+      // (includes demo preview wins after address injection)
+      if (walletAddress) {
+        markWinsRead(walletAddress, viewerRounds());
+      }
+      render();
+      const focusTarget = btnClose || modal.querySelector(".raffle-modal-card");
+      if (focusTarget && typeof focusTarget.focus === "function") {
+        try {
+          focusTarget.focus();
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+
+    btn.setAttribute("aria-haspopup", "dialog");
+    btn.setAttribute("aria-expanded", "false");
+    btn.setAttribute("aria-controls", "raffleModal");
+    btn.addEventListener("click", show);
+
+    if (btnClose) {
+      btnClose.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        close();
+      });
+    }
+    if (backdrop) {
+      backdrop.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        close();
+      });
+    }
+    listEl.addEventListener("click", (ev) => {
+      const tEl = ev.target;
+      if (!tEl || typeof tEl.closest !== "function") return;
+      const copyBtn = tEl.closest("[data-copy]");
+      if (!copyBtn) return;
+      ev.preventDefault();
+      copyText(copyBtn.getAttribute("data-copy") || "", copyBtn);
+    });
+
+    // Prefetch so the red dot can appear without opening the modal first
+    load(false);
+
+    window.__onRaffleWalletChange = () => {
+      if (open) render();
+      else syncUnreadBadge();
+      // If cache empty, try load for badge
+      if (!cache) load(false);
+      else if (!loading && walletAddress) {
+        // refresh badge against latest cache
+        syncUnreadBadge();
+      }
+    };
+
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape" && open) {
+        ev.preventDefault();
+        close();
+      }
+    });
+  })();
+
+  // OpenSea explain modal (header link between Twitter and Updates)
+  (function bindOpenSeaModal() {
+    const btn = $("btnOpenSea");
+    const modal = $("openSeaModal");
+    const backdrop = $("openSeaModalBackdrop");
+    const btnClose = $("btnCloseOpenSea");
+    const cta = $("openSeaCta");
+    if (!btn || !modal) return;
+    if (cta && OFFICIAL_NFT.mintUrl) {
+      cta.setAttribute("href", OFFICIAL_NFT.mintUrl);
+    }
+
+    if (modal.parentElement !== document.body) {
+      document.body.appendChild(modal);
+    }
+
+    let open = false;
+    let lastFocus = null;
+
+    function close() {
+      if (!open) return;
+      open = false;
+      modal.hidden = true;
+      document.body.classList.remove("os-modal-open");
+      btn.setAttribute("aria-expanded", "false");
+      if (lastFocus && typeof lastFocus.focus === "function") {
+        try {
+          lastFocus.focus();
+        } catch {
+          /* ignore */
+        }
+      }
+      lastFocus = null;
+    }
+
+    function show(ev) {
+      if (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+      }
+      lastFocus = document.activeElement;
+      open = true;
+      modal.hidden = false;
+      document.body.classList.add("os-modal-open");
+      btn.setAttribute("aria-expanded", "true");
+      const focusTarget = btnClose || modal.querySelector(".os-modal-card");
+      if (focusTarget && typeof focusTarget.focus === "function") {
+        try {
+          focusTarget.focus();
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+
+    btn.setAttribute("aria-haspopup", "dialog");
+    btn.setAttribute("aria-expanded", "false");
+    btn.setAttribute("aria-controls", "openSeaModal");
+    btn.addEventListener("click", show);
+
+    if (btnClose) {
+      btnClose.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        close();
+      });
+    }
+    if (backdrop) {
+      backdrop.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        close();
+      });
+    }
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape" && open) {
+        ev.preventDefault();
+        close();
+      }
+    });
+  })();
+
   // Lightweight updates panel (replaces empty Telegram link)
   (function bindUpdatesPanel() {
     const btn = $("btnUpdates");
@@ -2303,10 +3212,13 @@
 
   applyThemeUi();
   applyStaticI18n();
+  updateDataFreshnessUi();
   refresh();
   timer = setInterval(refresh, 4000);
+  freshnessTicker = setInterval(updateDataFreshnessUi, 1000);
 
   window.addEventListener("beforeunload", () => {
     if (timer) clearInterval(timer);
+    if (freshnessTicker) clearInterval(freshnessTicker);
   });
 })();

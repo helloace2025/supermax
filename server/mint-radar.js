@@ -1766,6 +1766,109 @@ export function getMintSnapshot(opts = {}) {
   };
 }
 
+/**
+ * Wallet NFT inventory via Blockscout (ERC-721 + ERC-1155).
+ * Caps pages so a heavy bag does not stall the UI.
+ */
+export async function fetchWalletNfts(address, opts = {}) {
+  const addr = String(address || "").trim().toLowerCase();
+  if (!/^0x[a-f0-9]{40}$/.test(addr)) {
+    const err = new Error("invalid address");
+    err.code = "BAD_ADDRESS";
+    throw err;
+  }
+  const maxItems = Math.max(1, Math.min(200, Number(opts.maxItems) || 120));
+  const maxPages = Math.max(1, Math.min(6, Number(opts.maxPages) || 3));
+
+  const items = [];
+  let nextParams = null;
+  let pages = 0;
+  let truncated = false;
+
+  while (pages < maxPages && items.length < maxItems) {
+    pages += 1;
+    const url = new URL(`${BLOCKSCOUT}/api/v2/addresses/${addr}/nft`);
+    url.searchParams.set("type", "ERC-721,ERC-1155");
+    if (nextParams && typeof nextParams === "object") {
+      for (const [k, v] of Object.entries(nextParams)) {
+        if (v != null && v !== "") url.searchParams.set(k, String(v));
+      }
+    }
+    // Reuse fetchJson — honors api key, timeout, and global 429 backoff
+    let data;
+    let lastErr = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        data = await fetchJson(url.toString());
+        lastErr = null;
+        break;
+      } catch (e) {
+        lastErr = e;
+        if (attempt === 0) await sleep(400);
+      }
+    }
+    if (lastErr) {
+      const err = new Error(lastErr?.message || String(lastErr));
+      err.code = "UPSTREAM";
+      throw err;
+    }
+    const batch = Array.isArray(data?.items) ? data.items : [];
+    for (const raw of batch) {
+      if (items.length >= maxItems) {
+        truncated = true;
+        break;
+      }
+      const token = raw?.token || {};
+      const contract = String(token.address_hash || "").toLowerCase();
+      if (contract && BLACKLIST.has(contract)) continue;
+      if (isVeOrGovNft(token, null) || isJunkToken(token, null)) continue;
+      const tokenId = String(raw?.id ?? raw?.token_id ?? "");
+      const metaName = raw?.metadata?.name;
+      const collection = String(token.name || token.symbol || "NFT").trim();
+      const name =
+        (metaName && String(metaName).trim()) ||
+        (collection && tokenId ? `${collection} #${tokenId}` : collection) ||
+        (tokenId ? `#${tokenId}` : "NFT");
+      const image =
+        raw?.image_url ||
+        raw?.media_url ||
+        raw?.metadata?.image ||
+        token.icon_url ||
+        null;
+      items.push({
+        contract: contract || null,
+        tokenId: tokenId || null,
+        name,
+        collection,
+        symbol: token.symbol || null,
+        image,
+        tokenType: raw?.token_type || token.type || null,
+        explorerToken: contract
+          ? `${EXPLORER}/token/${contract}${tokenId ? `/instance/${tokenId}` : ""}`
+          : null,
+        opensea: contract
+          ? `https://opensea.io/item/${OPENSEA_CHAIN}/${contract}/${tokenId || ""}`
+          : null,
+      });
+    }
+    nextParams = data?.next_page_params || null;
+    if (!nextParams || !batch.length) break;
+    if (items.length >= maxItems) {
+      truncated = true;
+      break;
+    }
+  }
+  if (nextParams) truncated = true;
+
+  return {
+    ok: true,
+    address: addr,
+    count: items.length,
+    truncated,
+    items,
+  };
+}
+
 export function startMintRadar() {
   if (pollTimer) return;
   loadMintedOutArchive();

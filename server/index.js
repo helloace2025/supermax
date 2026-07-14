@@ -4,12 +4,45 @@
  */
 
 import express from "express";
+import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { getMintSnapshot, startMintRadar } from "./mint-radar.js";
+import {
+  getMintSnapshot,
+  startMintRadar,
+  fetchWalletNfts,
+} from "./mint-radar.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
+const DATA_DIR = process.env.DATA_DIR
+  ? path.resolve(process.env.DATA_DIR)
+  : path.join(ROOT, "data");
+const RAFFLES_PATH = path.join(DATA_DIR, "raffles.json");
+
+/** Default seed when data/raffles.json is missing */
+const DEFAULT_RAFFLES = {
+  version: 1,
+  updatedAt: null,
+  rules: {
+    zh: "持有社区 NFT 即可参与。按 token 编号随机抽取（持有越多，号码越多，中签概率越高）；同一地址单期最多中 1 次，若多个号落在同一地址只计 1 个名额并重抽。若希望有机会获得多个名额，可将 NFT 分至不同钱包。开奖后即时公示。",
+    en: "Hold our community NFT to enter. We draw random token IDs (more NFTs = more tickets = higher odds). Max 1 win per wallet per round — if several of your IDs hit, only one counts and we redraw. To pursue multiple spots, split NFTs across wallets. Results are published immediately.",
+  },
+  rounds: [],
+};
+
+function loadRaffles() {
+  try {
+    if (fs.existsSync(RAFFLES_PATH)) {
+      const raw = fs.readFileSync(RAFFLES_PATH, "utf8");
+      const data = JSON.parse(raw);
+      if (data && Array.isArray(data.rounds)) return data;
+    }
+  } catch (e) {
+    console.error("[raffles] load failed:", e?.message || e);
+  }
+  return { ...DEFAULT_RAFFLES, rounds: [] };
+}
 
 // Railway injects PORT; bind all interfaces for container networking
 const PORT = Number(process.env.PORT) || 3789;
@@ -84,6 +117,45 @@ app.get("/api/mints", (req, res) => {
     res.json(snap);
   } catch (e) {
     res.status(500).json({ error: e.message || String(e) });
+  }
+});
+
+// Connected wallet NFT inventory (Blockscout)
+app.get("/api/wallet/nfts", async (req, res) => {
+  try {
+    const address = String(req.query.address || "").trim();
+    const data = await fetchWalletNfts(address);
+    res.json(data);
+  } catch (e) {
+    const code = e?.code;
+    if (code === "BAD_ADDRESS") {
+      res.status(400).json({ ok: false, error: "invalid address" });
+      return;
+    }
+    console.error("[wallet/nfts]", e?.message || e);
+    res.status(502).json({
+      ok: false,
+      error: e?.message || String(e),
+    });
+  }
+});
+
+// Whitelist raffle rounds (public read — edit data/raffles.json to publish)
+app.get("/api/raffles", (_req, res) => {
+  try {
+    const data = loadRaffles();
+    const rounds = [...(data.rounds || [])].sort(
+      (a, b) => Number(b.period || 0) - Number(a.period || 0)
+    );
+    res.json({
+      ok: true,
+      version: data.version || 1,
+      updatedAt: data.updatedAt || null,
+      rules: data.rules || DEFAULT_RAFFLES.rules,
+      rounds,
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || String(e) });
   }
 });
 
