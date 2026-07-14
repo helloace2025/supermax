@@ -115,8 +115,7 @@
       raffleDemoBadge: "示例预览",
       raffleUnreadAria: "有未读中奖通知",
       refresh: "立即刷新",
-      dataFreshness: (rel) => `更新于 ${rel}`,
-      dataFreshnessWaiting: "等待数据…",
+
       toggleGroupLabel: "主题与语言",
       themeLight: "浅色",
       themeDark: "深色",
@@ -274,8 +273,7 @@
       raffleDemoBadge: "Demo",
       raffleUnreadAria: "Unread win notification",
       refresh: "Refresh",
-      dataFreshness: (rel) => `Updated ${rel}`,
-      dataFreshnessWaiting: "Waiting for data…",
+
       toggleGroupLabel: "Theme and language",
       themeLight: "Light",
       themeDark: "Dark",
@@ -477,12 +475,11 @@
     dataHealthDismiss: $("dataHealthDismiss"),
     dataHealthLink: $("dataHealthLink"),
     blockscoutStatusChip: $("blockscoutStatusChip"),
-    dataFreshness: $("dataFreshness"),
+
   };
 
   /** Last successful client poll (UI refresh) timestamp */
-  let lastDataRefreshAt = null;
-  let freshnessTicker = null;
+
 
   /** User dismissed the current health code — re-show if code changes */
   let healthDismissedCode = null;
@@ -834,21 +831,6 @@
       window.__renderRaffleModal();
     }
     if (isWalletMenuOpen()) renderWalletNfts();
-    updateDataFreshnessUi();
-  }
-
-  function updateDataFreshnessUi() {
-    const el = els.dataFreshness;
-    if (!el) return;
-    el.classList.remove("is-stale");
-    if (!lastDataRefreshAt) {
-      el.textContent = t("dataFreshnessWaiting");
-      return;
-    }
-    const rel = relTime(new Date(lastDataRefreshAt).toISOString());
-    el.textContent = t("dataFreshness", rel);
-    const ageSec = (Date.now() - lastDataRefreshAt) / 1000;
-    if (ageSec > 20) el.classList.add("is-stale");
   }
 
   function renderUpdatesList() {
@@ -2231,7 +2213,6 @@
       mintedOutBootstrapped = true;
 
       lastData = data;
-      lastDataRefreshAt = Date.now();
       // 已铸完: renderMintedOut only paints when contract set changes (no 4s DOM thrash)
       renderAll(data, { forceMintedOut: false });
     } catch (e) {
@@ -2251,8 +2232,6 @@
           storeSize: 0,
         });
       }
-    } finally {
-      updateDataFreshnessUi();
     }
   }
 
@@ -3212,13 +3191,10 @@
 
   applyThemeUi();
   applyStaticI18n();
-  updateDataFreshnessUi();
   refresh();
   timer = setInterval(refresh, 4000);
-  freshnessTicker = setInterval(updateDataFreshnessUi, 1000);
 
   window.addEventListener("beforeunload", () => {
     if (timer) clearInterval(timer);
-    if (freshnessTicker) clearInterval(freshnessTicker);
   });
 })();

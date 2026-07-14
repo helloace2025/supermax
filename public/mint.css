@@ -1355,27 +1355,9 @@ html[data-theme="light"] .wallet-btn.is-connected {
   align-items: center;
 }
 
-.refresh-group {
+.refresh-wrap {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-}
-
-.data-freshness {
-  font-family: var(--mono);
-  font-size: 0.72rem;
-  font-weight: 500;
-  color: var(--text-soft);
-  white-space: nowrap;
-  letter-spacing: 0.01em;
-}
-
-.data-freshness.is-stale {
-  color: #fbbf24;
-}
-
-html[data-theme="light"] .data-freshness.is-stale {
-  color: #b45309;
 }
 
 /* —— Header chip: Blockscout live (green) / fault (red) —— */
