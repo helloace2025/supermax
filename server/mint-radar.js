@@ -97,7 +97,11 @@ const VE_OR_GOV_NFT_RE =
 const VE_OR_GOV_METHOD_RE =
   /create_?lock|increase_?(amount|unlock_?time)|merge(_?nft)?|split(_?nft)?|deposit_?for|withdraw(_?nft)?|checkpoint/i;
 
-const MAX_EVENTS = 3000;
+/** Sliding store: 1h windows only need ~1k–1.5k events; lower cap = lower RSS */
+const MAX_EVENTS = Math.max(
+  400,
+  Math.min(3000, Number(process.env.MAX_EVENTS) || 1500)
+);
 /** Sticky minted-out history (survives event eviction; file survives restarts if volume set) */
 const __radarDir = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.DATA_DIR || path.join(__radarDir, "..", "data");
@@ -114,19 +118,26 @@ const FETCH_TIMEOUT_MS = 12000;
 /** Tx price lookups share the same Blockscout quota as poll — keep low. */
 const TX_PRICE_CONCURRENCY = 1;
 const TX_PRICE_GAP_MS = 350;
-const TX_PRICE_CACHE_MAX = 4000;
+const TX_PRICE_CACHE_MAX = 2500;
+const TX_PRICE_QUEUE_MAX = 200;
 const TX_PRICE_ERROR_COOLDOWN_MS = 30_000;
 /** Global pause after HTTP 429 so poll + price workers back off together */
 const RATE_LIMIT_BACKOFF_MS = 8_000;
 let rateLimitUntil = 0;
 
 /**
- * OpenSea public HTML pages are multi‑MB. Loading whole bodies concurrently
- * is the main Railway OOM vector ("Deploy Ran Out of Memory").
+ * OpenSea public HTML pages are multi‑MB and were the main Railway OOM vector.
+ * Default OFF — REST + Blockscout cover icons; enable only with OPENSEA_HTML_ENABLED=1.
  */
+const OPENSEA_HTML_ENABLED =
+  process.env.OPENSEA_HTML_ENABLED === "1" ||
+  process.env.OPENSEA_HTML_ENABLED === "true";
 const OPENSEA_HTML_MAX_BYTES = Math.max(
-  512 * 1024,
-  Number(process.env.OPENSEA_HTML_MAX_BYTES) || 1.5 * 1024 * 1024
+  64 * 1024,
+  Math.min(
+    2 * 1024 * 1024,
+    Number(process.env.OPENSEA_HTML_MAX_BYTES) || 512 * 1024
+  )
 );
 /** Only one OpenSea HTML scrape at a time (meta worker + twitter fill share this) */
 let openSeaHtmlInFlight = 0;
@@ -134,10 +145,20 @@ const OPENSEA_HTML_MAX_CONCURRENT = 1;
 /** @type {Array<() => void>} */
 const openSeaHtmlWaiters = [];
 
+/** RSS soft ceiling (MB) — enter degrade: drop HTML jobs, skip non-essential enrich */
+const RSS_DEGRADE_MB = Math.max(
+  200,
+  Number(process.env.RSS_DEGRADE_MB) || 380
+);
+const RSS_RECOVER_MB = Math.max(150, RSS_DEGRADE_MB - 80);
+let memoryDegraded = false;
+
 /** @type {Map<string, object>} eventKey -> mint event */
 const eventMap = new Map();
 /** ordered keys (oldest first) for eviction */
 const eventOrder = [];
+/** txHash -> Set(eventKey) for O(1) mint counts + price stamping (no full-store scans) */
+const eventsByTx = new Map();
 
 /**
  * Tx value cache: hash -> { valueWei, unitWei, nftMints, status, updatedAt }
@@ -160,13 +181,15 @@ let txPriceResolvedErr = 0;
  */
 const metaCache = new Map();
 /** Bound meta entries (each may hold description/urls); trim cold contracts */
-const META_CACHE_MAX = 500;
+const META_CACHE_MAX = 350;
+const META_QUEUE_MAX = 80;
 /** @type {Set<string>} */
 const metaQueued = new Set();
 /** @type {string[]} */
 const metaQueue = [];
 let metaBusy = false;
 /** Serialize background Twitter HTML fills (never fan-out multi-MB pages) */
+const TWITTER_HTML_QUEUE_MAX = 20;
 /** @type {Array<{contract: string, slug: string|null}>} */
 const twitterHtmlJobs = [];
 let twitterHtmlWorkerBusy = false;
@@ -254,11 +277,7 @@ function formatPriceLabel(wei) {
 /** How many ERC-721 mint events we already stored for this tx hash. */
 function countNftMintsInStore(hash) {
   const h = String(hash || "").toLowerCase();
-  let n = 0;
-  for (const e of allEvents()) {
-    if (String(e.txHash || "").toLowerCase() === h) n += 1;
-  }
-  return n;
+  return eventsByTx.get(h)?.size || 0;
 }
 
 /** Count ERC-721 mints (from 0x0) in a token-transfer list. */
@@ -354,8 +373,11 @@ function applyTxPriceToEvents(hash) {
   meta.updatedAt = Date.now();
 
   let hit = 0;
-  for (const e of allEvents()) {
-    if (String(e.txHash || "").toLowerCase() !== h) continue;
+  const keys = eventsByTx.get(h);
+  if (!keys) return false;
+  for (const key of keys) {
+    const e = eventMap.get(key);
+    if (!e) continue;
     e.txValueWei = valueWei.toString();
     e.txValueEth = meta.txValueEth;
     e.mintQtyInTx = n;
@@ -422,6 +444,11 @@ function queueTxPrice(hash, hintValueWei = null) {
     if (age < TX_PRICE_ERROR_COOLDOWN_MS) return;
   }
   if (txPriceQueued.has(h)) return;
+  // Hard cap queue so overnight price backlog cannot balloon
+  if (txPriceQueue.length >= TX_PRICE_QUEUE_MAX) {
+    const dropped = txPriceQueue.pop();
+    if (dropped) txPriceQueued.delete(dropped);
+  }
   txPriceQueued.add(h);
   // Newest first so the live board gets prices sooner under load
   txPriceQueue.unshift(h);
@@ -699,7 +726,78 @@ function processMemoryStats() {
     heapTotalMb: mb(m.heapTotal),
     externalMb: mb(m.external),
     arrayBuffersMb: mb(m.arrayBuffers || 0),
+    degraded: memoryDegraded,
+    htmlEnabled: OPENSEA_HTML_ENABLED && !memoryDegraded,
   };
+}
+
+/** Update soft memory mode; drop expensive work when RSS is high. */
+function refreshMemoryMode() {
+  const rssMb = process.memoryUsage().rss / (1024 * 1024);
+  if (!memoryDegraded && rssMb >= RSS_DEGRADE_MB) {
+    memoryDegraded = true;
+    // Drop pending HTML / meta backlog so peak can fall
+    while (twitterHtmlJobs.length) twitterHtmlJobs.pop();
+    twitterHtmlQueued.clear();
+    if (metaQueue.length > 20) {
+      const keep = metaQueue.splice(-20);
+      metaQueued.clear();
+      metaQueue.length = 0;
+      for (const c of keep) {
+        metaQueue.push(c);
+        metaQueued.add(c);
+      }
+    }
+    console.warn(
+      `[mint-radar] memory degrade ON rss=${Math.round(rssMb)}MB (drop html/meta backlog)`
+    );
+  } else if (memoryDegraded && rssMb <= RSS_RECOVER_MB) {
+    memoryDegraded = false;
+    console.log(
+      `[mint-radar] memory degrade OFF rss=${Math.round(rssMb)}MB`
+    );
+  }
+  return memoryDegraded;
+}
+
+function allowOpenSeaHtml() {
+  if (!OPENSEA_HTML_ENABLED) return false;
+  refreshMemoryMode();
+  return !memoryDegraded;
+}
+
+/** Walk live events without allocating a full array copy. */
+function forEachEvent(fn) {
+  for (const k of eventOrder) {
+    const e = eventMap.get(k);
+    if (e) fn(e);
+  }
+}
+
+function indexEventByTx(m) {
+  if (!m?.txHash || !m?.key) return;
+  const h = String(m.txHash).toLowerCase();
+  let set = eventsByTx.get(h);
+  if (!set) {
+    set = new Set();
+    eventsByTx.set(h, set);
+  }
+  set.add(m.key);
+}
+
+function unindexEventByTx(m) {
+  if (!m?.txHash || !m?.key) return;
+  const h = String(m.txHash).toLowerCase();
+  const set = eventsByTx.get(h);
+  if (!set) return;
+  set.delete(m.key);
+  if (set.size === 0) eventsByTx.delete(h);
+}
+
+function removeEventKey(key) {
+  const e = eventMap.get(key);
+  if (e) unindexEventByTx(e);
+  eventMap.delete(key);
 }
 
 async function withOpenSeaHtmlSlot(fn) {
@@ -862,8 +960,8 @@ function needsEnrich(meta) {
   // maxSupply miss must NOT wait for full 30m social meta TTL — retry often
   if (meta.maxSupplyStatus !== "ok" && supplyAge > 60_000) return true;
 
-  // No Twitter yet — only re-queue after long backoff (HTML scrape is expensive / OOM-prone)
-  if (meta.status === "ok" && !meta.twitter) {
+  // No Twitter yet — only re-queue when HTML is allowed (otherwise REST already tried)
+  if (meta.status === "ok" && !meta.twitter && allowOpenSeaHtml()) {
     const sinceHtml = Date.now() - (meta.twitterHtmlTriedAt || 0);
     if (!meta.twitterHtmlTriedAt || sinceHtml > TWITTER_HTML_RETRY_MS) {
       return age > 5 * 60_000;
@@ -880,8 +978,15 @@ function queueMeta(contract, hintIcon = null) {
   if (!key || key.length < 10) return;
   const meta = getMeta(key);
   if (hintIcon && !meta.icon) meta.icon = hintIcon;
+  // Under memory pressure only keep icon hints — skip re-enrich churn
+  if (memoryDegraded && meta.status === "ok" && meta.icon) return;
   if (!needsEnrich(meta)) return;
   if (metaQueued.has(key)) return;
+  if (metaQueue.length >= META_QUEUE_MAX) {
+    // Drop oldest cold job so hot contracts still get a slot
+    const dropped = metaQueue.shift();
+    if (dropped) metaQueued.delete(dropped);
+  }
   metaQueued.add(key);
   metaQueue.push(key);
   kickMetaWorker();
@@ -941,10 +1046,13 @@ async function openSeaFetchJson(url) {
 }
 
 /**
- * Public OpenSea HTML — Twitter often sits past the first ~1MB of the page.
+ * Public OpenSea HTML — opt-in only (OPENSEA_HTML_ENABLED=1).
  * Body is hard-capped and globally serialized so Railway hobby RAM stays safe.
  */
 async function openSeaFetchHtml(url) {
+  if (!allowOpenSeaHtml()) {
+    throw new Error("OpenSea HTML disabled (set OPENSEA_HTML_ENABLED=1 to allow)");
+  }
   return withOpenSeaHtmlSlot(async () => {
     const ctrl = new AbortController();
     // HTML pages are heavy; allow a bit longer than REST
@@ -1036,6 +1144,14 @@ function parseOpenSeaCollectionHtml(html) {
 async function enrichFromOpenSeaHtml(contract, slugHint = null) {
   const c = String(contract || "").toLowerCase();
   if (!c && !slugHint) return null;
+  if (!allowOpenSeaHtml()) {
+    if (c) {
+      const meta = getMeta(c);
+      meta.twitterHtmlTriedAt = Date.now();
+      meta.twitterHtmlMiss = true;
+    }
+    return null;
+  }
   if (c) {
     const meta = getMeta(c);
     meta.twitterHtmlTriedAt = Date.now();
@@ -1066,6 +1182,7 @@ async function enrichFromOpenSeaHtml(contract, slugHint = null) {
 /** Background: fill Twitter after API returned icon/meta without twitter_username */
 const twitterHtmlQueued = new Set();
 function scheduleTwitterHtmlFill(contract, slug) {
+  if (!allowOpenSeaHtml()) return;
   const c = String(contract || "").toLowerCase();
   if (!c || twitterHtmlQueued.has(c)) return;
   const meta = getMeta(c);
@@ -1077,6 +1194,7 @@ function scheduleTwitterHtmlFill(contract, slug) {
   ) {
     return;
   }
+  if (twitterHtmlJobs.length >= TWITTER_HTML_QUEUE_MAX) return;
   twitterHtmlQueued.add(c);
   twitterHtmlJobs.push({ contract: c, slug: slug || null });
   kickTwitterHtmlWorker();
@@ -1084,10 +1202,24 @@ function scheduleTwitterHtmlFill(contract, slug) {
 
 function kickTwitterHtmlWorker() {
   if (twitterHtmlWorkerBusy) return;
+  if (!allowOpenSeaHtml()) {
+    while (twitterHtmlJobs.length) {
+      const job = twitterHtmlJobs.pop();
+      if (job) twitterHtmlQueued.delete(job.contract);
+    }
+    return;
+  }
   twitterHtmlWorkerBusy = true;
   (async () => {
     try {
       while (twitterHtmlJobs.length) {
+        if (!allowOpenSeaHtml()) {
+          while (twitterHtmlJobs.length) {
+            const drop = twitterHtmlJobs.pop();
+            if (drop) twitterHtmlQueued.delete(drop.contract);
+          }
+          break;
+        }
         const job = twitterHtmlJobs.shift();
         if (!job) continue;
         try {
@@ -1287,10 +1419,11 @@ async function enrichFromOpenSea(contract) {
       };
     }
   } catch {
-    /* fall through to HTML */
+    /* fall through to HTML only if explicitly enabled */
   }
 
-  // 2) Public HTML fallback when REST fails (401 / network)
+  // 2) Public HTML fallback when REST fails — opt-in (OOM-prone)
+  if (!allowOpenSeaHtml()) return null;
   return enrichFromOpenSeaHtml(c);
 }
 
@@ -1578,7 +1711,7 @@ function normalizeMint(item) {
 function trimEvents() {
   while (eventOrder.length > MAX_EVENTS) {
     const old = eventOrder.shift();
-    eventMap.delete(old);
+    if (old) removeEventKey(old);
   }
   // keep ≥1h so hot table can show 5m / 30m / 1h mint counts
   const cutoff = Date.now() - 65 * 60 * 1000;
@@ -1587,7 +1720,7 @@ function trimEvents() {
     const e = eventMap.get(k);
     if (!e || e.ts >= cutoff) break;
     eventOrder.shift();
-    eventMap.delete(k);
+    removeEventKey(k);
   }
   // After event eviction, drop cold collection meta so heap does not grow overnight
   if (metaCache.size > META_CACHE_MAX) trimMetaCache();
@@ -1603,6 +1736,7 @@ function ingestItems(items) {
     if (eventMap.has(m.key)) continue;
     eventMap.set(m.key, m);
     eventOrder.push(m.key);
+    indexEventByTx(m);
     added += 1;
     if (m.txHash) touchedTx.add(String(m.txHash).toLowerCase());
     if (m.blockNumber != null) {
@@ -1732,21 +1866,21 @@ async function pollOnce() {
 
 /** Newest mint event timestamp in the in-memory store (ms), or null. */
 function newestEventTs() {
-  let max = null;
-  for (const e of allEvents()) {
-    if (e?.ts == null || !Number.isFinite(e.ts)) continue;
-    max = max == null ? e.ts : Math.max(max, e.ts);
+  // eventOrder is oldest→newest; walk from the end
+  for (let i = eventOrder.length - 1; i >= 0; i -= 1) {
+    const e = eventMap.get(eventOrder[i]);
+    if (e?.ts != null && Number.isFinite(e.ts)) return e.ts;
   }
-  return max;
+  return null;
 }
 
 /** Count mint events in the last `windowMs` (from now). */
 function countMintsInWindow(windowMs, now = Date.now()) {
   const from = now - windowMs;
   let n = 0;
-  for (const e of allEvents()) {
+  forEachEvent((e) => {
     if (e?.ts != null && e.ts >= from) n += 1;
-  }
+  });
   return n;
 }
 
@@ -1909,41 +2043,136 @@ function safePollOnce() {
   });
 }
 
+/** Materialize event list only when a true array is required (prefer forEachEvent). */
 function allEvents() {
   const out = [];
-  for (const k of eventOrder) {
-    const e = eventMap.get(k);
-    if (e) out.push(e);
-  }
+  forEachEvent((e) => out.push(e));
   return out;
 }
 
-/** Count mints per contract within a sliding window (integers only). */
-function mintCountsByContract(windowMs, now = Date.now()) {
-  const from = now - windowMs;
-  /** @type {Map<string, number>} */
-  const map = new Map();
-  for (const e of allEvents()) {
-    if (e.ts < from) continue;
-    map.set(e.contract, (map.get(e.contract) || 0) + 1);
+/**
+ * Finalize a raw per-contract aggregate row into an API row.
+ * @param {any} r
+ * @param {number} mintsInWindow — mints counted inside the caller's activity window
+ */
+function finalizeAggregateRow(r, mintsInWindow) {
+  const uniqueMinters = r.minters.size;
+  let topMethod = null;
+  let topMethodN = -1;
+  for (const [method, n] of r.methods) {
+    if (n > topMethodN) {
+      topMethodN = n;
+      topMethod = method;
+    }
   }
-  return map;
+  const mints5m = r.mints5m || 0;
+  const mints30m = r.mints30m || 0;
+  const mints1h = r.mints1h || 0;
+  const score = mints1h;
+  const priceWei = r.priceRefWei != null ? r.priceRefWei.toString() : null;
+  const priceEth = weiToEthString(r.priceRefWei);
+  const priceDisplay = formatPriceLabel(r.priceRefWei);
+  const mintedSafe = sanitizeNftMintedCount(
+    r.minted ?? r.totalSupply,
+    r.holders
+  );
+
+  return attachMetaFields({
+    contract: r.contract,
+    name: r.name,
+    symbol: r.symbol,
+    holders: r.holders,
+    minted: mintedSafe,
+    totalSupply: mintedSafe,
+    mints: mintsInWindow,
+    uniqueMinters,
+    topMethod,
+    mints5m,
+    mints30m,
+    mints1h,
+    mints1m: r.mints1m || 0,
+    mints15m: r.mints15m || 0,
+    priceWei,
+    priceEth,
+    priceDisplay,
+    priceMinWei: priceWei,
+    priceMaxWei: priceWei,
+    priceLastWei: priceWei,
+    priceMinEth: priceEth,
+    priceMaxEth: priceEth,
+    priceLastEth: priceEth,
+    priceMixed: false,
+    priceUnknown: r.priceUnknown,
+    lastMintAt: r.lastMintAt,
+    lastTs: r.lastTs,
+    lastTx: r.lastTx,
+    lastBlock: r.lastBlock,
+    explorerToken: r.explorerToken,
+    explorerTx: `${EXPLORER}/tx/${r.lastTx}`,
+    opensea:
+      r.opensea ||
+      `https://opensea.io/contract/${OPENSEA_CHAIN}/${r.contract}`,
+    score,
+    short: short(r.contract),
+  });
 }
 
-function aggregate(windowMs) {
-  const now = Date.now();
-  const from = now - windowMs;
-  const counts5m = mintCountsByContract(5 * 60 * 1000, now);
-  const counts30m = mintCountsByContract(30 * 60 * 1000, now);
-  const counts1h = mintCountsByContract(60 * 60 * 1000, now);
+function sortHotRows(list) {
+  list.sort(
+    (a, b) =>
+      b.mints1h - a.mints1h ||
+      b.mints30m - a.mints30m ||
+      b.mints5m - a.mints5m ||
+      b.lastTs - a.lastTs
+  );
+  return list;
+}
+
+/**
+ * Single pass over the event store: multi-window mint counts + 1h aggregate state.
+ * Avoids N× allEvents() copies that previously OOMed Railway on every /api/mints.
+ */
+function scanAggregateState(now = Date.now()) {
+  const from1 = now - 60_000;
+  const from5 = now - 5 * 60_000;
+  const from15 = now - 15 * 60_000;
+  const from30 = now - 30 * 60_000;
+  const from60 = now - 60 * 60_000;
+
   /** @type {Map<string, any>} */
   const by = new Map();
-
   /** @type {Set<string>} */
   const priceRecomputed = new Set();
-  for (const e of allEvents()) {
-    if (e.ts < from) continue;
-    // Ensure unit price is stamped before aggregation (cache may have resolved later)
+
+  let mints1m = 0;
+  let mints5m = 0;
+  let mints10m = 0;
+  let mints15m = 0;
+  let mints30m = 0;
+  let priceKnownEvents = 0;
+  /** @type {Set<string>} */
+  const collections5mSet = new Set();
+  const from10 = now - 10 * 60_000;
+
+  forEachEvent((e) => {
+    if (!e) return;
+    const ts = e.ts;
+    if (e.unitPriceWei != null) priceKnownEvents += 1;
+
+    if (ts != null && Number.isFinite(ts)) {
+      if (ts >= from1) mints1m += 1;
+      if (ts >= from5) {
+        mints5m += 1;
+        if (e.contract) collections5mSet.add(e.contract);
+      }
+      if (ts >= from10) mints10m += 1;
+      if (ts >= from15) mints15m += 1;
+      if (ts >= from30) mints30m += 1;
+    }
+
+    // Hot aggregation only needs ≤1h of activity
+    if (ts == null || ts < from60) return;
+
     hydrateEventPrice(e, priceRecomputed);
     let row = by.get(e.contract);
     if (!row) {
@@ -1954,15 +2183,13 @@ function aggregate(windowMs) {
         holders: e.holders,
         minted: e.minted ?? e.totalSupply,
         totalSupply: e.minted ?? e.totalSupply,
-        mints: 0,
+        mints1m: 0,
+        mints5m: 0,
+        mints15m: 0,
+        mints30m: 0,
+        mints1h: 0,
         minters: new Set(),
         methods: new Map(),
-        /**
-         * Reference unit price = unit from the most recent mint with a known price.
-         * (unit = tx.value / # NFTs in that tx — e.g. 0.000025/5 → 0.000005)
-         * Prefer "current" over sticky first — first was often wrong when batch qty
-         * arrived late, and free→paid projects need the paid unit.
-         */
         priceRefWei: null,
         priceRefTs: null,
         priceUnknown: 0,
@@ -1976,7 +2203,13 @@ function aggregate(windowMs) {
       };
       by.set(e.contract, row);
     }
-    row.mints += 1;
+
+    row.mints1h += 1;
+    if (ts >= from1) row.mints1m += 1;
+    if (ts >= from5) row.mints5m += 1;
+    if (ts >= from15) row.mints15m += 1;
+    if (ts >= from30) row.mints30m += 1;
+
     if (e.minter) row.minters.add(e.minter);
     if (e.method) {
       row.methods.set(e.method, (row.methods.get(e.method) || 0) + 1);
@@ -1986,12 +2219,10 @@ function aggregate(windowMs) {
     if (unit == null) {
       row.priceUnknown += 1;
     } else if (row.priceRefTs == null || e.ts >= row.priceRefTs) {
-      // Latest known unit (recomputed after batch qty fix)
       row.priceRefWei = unit;
       row.priceRefTs = e.ts;
     }
 
-    // refresh metadata from newest
     if (e.ts >= row.lastTs) {
       row.lastTs = e.ts;
       row.lastMintAt = e.timestamp;
@@ -2000,7 +2231,6 @@ function aggregate(windowMs) {
       row.name = e.name || row.name;
       row.symbol = e.symbol || row.symbol;
       if (e.holders != null) row.holders = e.holders;
-      // Newest event wins — including null after sanitize (clears veNFT garbage)
       const m = sanitizeNftMintedCount(
         e.minted ?? e.totalSupply,
         e.holders ?? row.holders
@@ -2018,76 +2248,48 @@ function aggregate(windowMs) {
       }
     }
     if (e.ts < row.firstTs) row.firstTs = e.ts;
-  }
-
-  const list = [...by.values()].map((r) => {
-    const uniqueMinters = r.minters.size;
-    const topMethod =
-      [...r.methods.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
-    const mints5m = counts5m.get(r.contract) || 0;
-    const mints30m = counts30m.get(r.contract) || 0;
-    const mints1h = counts1h.get(r.contract) || 0;
-    // Rank by 1h mint volume only (higher total = hotter)
-    const score = mints1h;
-    const priceWei =
-      r.priceRefWei != null ? r.priceRefWei.toString() : null;
-    const priceEth = weiToEthString(r.priceRefWei);
-    const priceDisplay = formatPriceLabel(r.priceRefWei);
-    // Final guard: drop absurd minted left over from older process versions
-    const mintedSafe = sanitizeNftMintedCount(
-      r.minted ?? r.totalSupply,
-      r.holders
-    );
-
-    return attachMetaFields({
-      contract: r.contract,
-      name: r.name,
-      symbol: r.symbol,
-      holders: r.holders,
-      minted: mintedSafe,
-      totalSupply: mintedSafe,
-      mints: r.mints,
-      uniqueMinters,
-      topMethod,
-      mints5m,
-      mints30m,
-      mints1h,
-      // single reference = latest known unit price (tx.value / mint count)
-      priceWei,
-      priceEth,
-      priceDisplay,
-      // legacy aliases (same single value; no ranges)
-      priceMinWei: priceWei,
-      priceMaxWei: priceWei,
-      priceLastWei: priceWei,
-      priceMinEth: priceEth,
-      priceMaxEth: priceEth,
-      priceLastEth: priceEth,
-      priceMixed: false,
-      priceUnknown: r.priceUnknown,
-      lastMintAt: r.lastMintAt,
-      lastTs: r.lastTs,
-      lastTx: r.lastTx,
-      lastBlock: r.lastBlock,
-      explorerToken: r.explorerToken,
-      explorerTx: `${EXPLORER}/tx/${r.lastTx}`,
-      opensea:
-        r.opensea ||
-        `https://opensea.io/contract/${OPENSEA_CHAIN}/${r.contract}`,
-      score,
-      short: short(r.contract),
-    });
   });
 
-  // Primary: 1h total mints; ties → 30m → 5m → recency
-  list.sort(
-    (a, b) =>
-      b.mints1h - a.mints1h ||
-      b.mints30m - a.mints30m ||
-      b.mints5m - a.mints5m ||
-      b.lastTs - a.lastTs
-  );
-  return list;
+  return {
+    by,
+    stats: {
+      mints1m,
+      mints5m,
+      mints10m,
+      mints15m,
+      mints30m,
+      collections5m: collections5mSet.size,
+      priceKnownEvents,
+    },
+  };
+}
+
+/**
+ * Build hot list for a window: contracts with activity in that window.
+ * mints field = count inside window; ranking still uses mints1h.
+ */
+function hotFromScan(by, windowMs, limit, now = Date.now()) {
+  const from = now - windowMs;
+  const list = [];
+  for (const r of by.values()) {
+    if ((r.lastTs || 0) < from) continue;
+    let mintsInWindow = r.mints1h;
+    if (windowMs <= 60_000) mintsInWindow = r.mints1m;
+    else if (windowMs <= 5 * 60_000) mintsInWindow = r.mints5m;
+    else if (windowMs <= 15 * 60_000) mintsInWindow = r.mints15m;
+    else if (windowMs <= 30 * 60_000) mintsInWindow = r.mints30m;
+    if (mintsInWindow <= 0) continue;
+    list.push(finalizeAggregateRow(r, mintsInWindow));
+  }
+  sortHotRows(list);
+  return list.slice(0, Math.max(1, limit));
+}
+
+/** @deprecated prefer scanAggregateState — kept for any external callers */
+function aggregate(windowMs) {
+  const now = Date.now();
+  const { by } = scanAggregateState(now);
+  return hotFromScan(by, windowMs, 10_000, now);
 }
 
 function loadMintedOutArchive() {
@@ -2195,13 +2397,25 @@ function rememberMintedOut(row) {
   scheduleSaveMintedOutArchive();
 }
 
-/** Pull live sold-out detections into the sticky archive. */
+/**
+ * Pull live sold-out detections into the sticky archive.
+ * Uses latest event per contract + meta maxSupply (store only keeps ~1h anyway).
+ */
+function harvestMintedOutFromBy(by) {
+  try {
+    for (const r of by.values()) {
+      const row = finalizeAggregateRow(r, r.mints1h || 0);
+      if (row?.mintedOut) rememberMintedOut(row);
+    }
+  } catch (e) {
+    console.warn("[mint-radar] harvestMintedOut:", e.message || e);
+  }
+}
+
 function harvestMintedOut() {
   try {
-    const windowMs = 30 * 24 * 60 * 60 * 1000;
-    for (const r of aggregate(windowMs)) {
-      if (r?.mintedOut) rememberMintedOut(r);
-    }
+    const { by } = scanAggregateState();
+    harvestMintedOutFromBy(by);
   } catch (e) {
     console.warn("[mint-radar] harvestMintedOut:", e.message || e);
   }
@@ -2211,8 +2425,8 @@ function harvestMintedOut() {
  * Sold-out list = sticky archive (history) ∪ live detections.
  * Entries are not deleted when mint events age out of the rolling store.
  */
-function collectMintedOut(limit = 50) {
-  harvestMintedOut();
+function collectMintedOut(limit = 50, opts = {}) {
+  if (!opts.skipHarvest) harvestMintedOut();
   const n = Math.max(5, Math.min(100, Number(limit) || 50));
   const list = [...mintedOutArchive.values()].map((r) => {
     const m = getMeta(r.contract);
@@ -2261,58 +2475,46 @@ function excludeMintedOutRows(list) {
 }
 
 export function getMintSnapshot(opts = {}) {
+  refreshMemoryMode();
   const windowMin = Math.max(1, Math.min(60, Number(opts.windowMin) || 60));
   const feedLimit = Math.max(10, Math.min(200, Number(opts.feedLimit) || 80));
   const hotLimit = Math.max(5, Math.min(50, Number(opts.hotLimit) || 25));
   const outLimit = Math.max(5, Math.min(100, Number(opts.outLimit) || 50));
   // out=0 → skip building minted-out payload (client already cached); still harvest for hot filter
-  const wantMintedOutPayload = opts.includeMintedOut !== false && Number(opts.outLimit) !== 0;
+  const wantMintedOutPayload =
+    opts.includeMintedOut !== false && Number(opts.outLimit) !== 0;
 
   const windowMs = windowMin * 60 * 1000;
-  // Archive any live sold-outs first so hot filter + payload stay consistent
-  harvestMintedOut();
-  const hot = excludeMintedOutRows(aggregate(windowMs)).slice(0, hotLimit);
-  const hot1 = excludeMintedOutRows(aggregate(60 * 1000)).slice(0, 10);
-  const hot15 = excludeMintedOutRows(aggregate(15 * 60 * 1000)).slice(0, 10);
-  const mintedOut = wantMintedOutPayload ? collectMintedOut(outLimit) : [];
-
-  // Single scan of the event store for feed + window stats (avoid 4× full copies)
-  const all = allEvents();
   const now = Date.now();
-  let mints1m = 0;
-  let mints5m = 0;
-  let mints10m = 0;
-  let mints15m = 0;
-  let mints30m = 0;
-  let priceKnownEvents = 0;
-  /** @type {Set<string>} */
-  const collections5mSet = new Set();
-  const from1 = now - 60_000;
-  const from5 = now - 5 * 60_000;
-  const from10 = now - 10 * 60_000;
-  const from15 = now - 15 * 60_000;
-  const from30 = now - 30 * 60_000;
-  for (const e of all) {
-    if (e?.unitPriceWei != null) priceKnownEvents += 1;
-    const ts = e?.ts;
-    if (ts == null || !Number.isFinite(ts)) continue;
-    if (ts >= from1) mints1m += 1;
-    if (ts >= from5) {
-      mints5m += 1;
-      if (e.contract) collections5mSet.add(e.contract);
-    }
-    if (ts >= from10) mints10m += 1;
-    if (ts >= from15) mints15m += 1;
-    if (ts >= from30) mints30m += 1;
-  }
-  const collections5m = collections5mSet.size;
+
+  // ONE scan: multi-window counts + hot aggregate state (was 4× aggregate + full copies)
+  const { by, stats: windowStats } = scanAggregateState(now);
+  harvestMintedOutFromBy(by);
+
+  const hot = excludeMintedOutRows(
+    hotFromScan(by, windowMs, hotLimit, now)
+  );
+  const hot1 = excludeMintedOutRows(hotFromScan(by, 60_000, 10, now));
+  const hot15 = excludeMintedOutRows(
+    hotFromScan(by, 15 * 60_000, 10, now)
+  );
+
+  // collectMintedOut would re-harvest; pass archive only (already harvested above)
+  const mintedOut = wantMintedOutPayload
+    ? collectMintedOut(outLimit, { skipHarvest: true })
+    : [];
 
   /** @type {Set<string>} */
   const feedPriceDone = new Set();
-  const feedStart = Math.max(0, all.length - feedLimit);
   const events = [];
-  for (let i = all.length - 1; i >= feedStart; i -= 1) {
-    const e = all[i];
+  // Newest-first feed without materializing the entire store
+  for (
+    let i = eventOrder.length - 1;
+    i >= 0 && events.length < feedLimit;
+    i -= 1
+  ) {
+    const e = eventMap.get(eventOrder[i]);
+    if (!e) continue;
     hydrateEventPrice(e, feedPriceDone);
     events.push(attachMetaFields(e));
   }
@@ -2348,22 +2550,24 @@ export function getMintSnapshot(opts = {}) {
       priceCache: txPriceCache.size,
       priceOk: txPriceResolvedOk,
       priceErr: txPriceResolvedErr,
-      priceKnownEvents,
+      priceKnownEvents: windowStats.priceKnownEvents,
       rateLimited: rateLimitUntil > Date.now(),
       rateLimitRemainMs: Math.max(0, rateLimitUntil - Date.now()),
       memory: processMemoryStats(),
       openSeaHtmlInFlight,
       twitterHtmlQueue: twitterHtmlJobs.length,
+      openSeaHtmlEnabled: OPENSEA_HTML_ENABLED,
+      memoryDegraded,
       /** Structured diagnosis for UI alert banner */
       health: computeHealth(),
     },
     stats: {
-      mints1m,
-      mints5m,
-      mints10m,
-      mints15m,
-      mints30m,
-      collections5m,
+      mints1m: windowStats.mints1m,
+      mints5m: windowStats.mints5m,
+      mints10m: windowStats.mints10m,
+      mints15m: windowStats.mints15m,
+      mints30m: windowStats.mints30m,
+      collections5m: windowStats.collections5m,
       windowMin,
     },
     hot,
@@ -2500,7 +2704,7 @@ export function startMintRadar() {
   console.log("[mint-radar] starting (Blockscout poll)");
   console.log(`[mint-radar] DATA_DIR=${DATA_DIR}`);
   console.log(
-    `[mint-radar] memory guards: events≤${MAX_EVENTS} meta≤${META_CACHE_MAX} txPrice≤${TX_PRICE_CACHE_MAX} html≤${Math.round(OPENSEA_HTML_MAX_BYTES / 1024)}KB concurrent=${OPENSEA_HTML_MAX_CONCURRENT}`
+    `[mint-radar] memory guards: events≤${MAX_EVENTS} meta≤${META_CACHE_MAX} txPrice≤${TX_PRICE_CACHE_MAX} queues meta/tx/html=${META_QUEUE_MAX}/${TX_PRICE_QUEUE_MAX}/${TWITTER_HTML_QUEUE_MAX} html=${OPENSEA_HTML_ENABLED ? "on" : "OFF"}≤${Math.round(OPENSEA_HTML_MAX_BYTES / 1024)}KB degrade≥${RSS_DEGRADE_MB}MB`
   );
   if (openSeaApiKey()) {
     console.log(
@@ -2512,18 +2716,24 @@ export function startMintRadar() {
     }, TRADE_VOLUME_TTL_MS);
   } else {
     console.warn(
-      "[mint-radar] OPENSEA_API_KEY unset — Twitter via public OpenSea HTML; 交易额 needs key"
+      "[mint-radar] OPENSEA_API_KEY unset — collection meta limited; set key for Twitter REST + 交易额"
     );
   }
-  // Periodic RSS log — helps confirm overnight OOM risk before Railway kills us
+  if (!OPENSEA_HTML_ENABLED) {
+    console.log(
+      "[mint-radar] OpenSea HTML scrape disabled (default). Set OPENSEA_HTML_ENABLED=1 only if needed"
+    );
+  }
+  // Periodic RSS check — auto-degrade + warn before Railway OOM
   setInterval(() => {
+    refreshMemoryMode();
     const mem = processMemoryStats();
-    if (mem.rssMb >= 350 || mem.heapUsedMb >= 250) {
+    if (mem.rssMb >= 300 || mem.heapUsedMb >= 200 || memoryDegraded) {
       console.warn(
-        `[mint-radar] memory high rss=${mem.rssMb}MB heap=${mem.heapUsedMb}MB store=${eventMap.size} meta=${metaCache.size} price=${txPriceCache.size} mintedOut=${mintedOutArchive.size}`
+        `[mint-radar] memory rss=${mem.rssMb}MB heap=${mem.heapUsedMb}MB degraded=${memoryDegraded} store=${eventMap.size} meta=${metaCache.size} price=${txPriceCache.size} mintedOut=${mintedOutArchive.size} txIdx=${eventsByTx.size}`
       );
     }
-  }, 5 * 60_000).unref?.();
+  }, 3 * 60_000).unref?.();
   safePollOnce();
   pollTimer = setInterval(safePollOnce, POLL_MS);
 }
