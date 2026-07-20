@@ -3,6 +3,8 @@
  * Only serves mint radar API + static UI.
  */
 
+// Load .env before mint-radar (and any module) reads process.env
+import "./load-env.js";
 import express from "express";
 import fs from "fs";
 import path from "path";
@@ -12,26 +14,12 @@ import {
   startMintRadar,
   fetchWalletNfts,
   refreshMintedOutTradeVolumes,
+  hasOpenSeaApiKey,
 } from "./mint-radar.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
 
-/** Load .env into process.env (local dev; Railway uses dashboard vars). */
-function loadDotEnv() {
-  const envPath = path.join(ROOT, ".env");
-  if (!fs.existsSync(envPath)) return;
-  for (const line of fs.readFileSync(envPath, "utf8").split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const eq = trimmed.indexOf("=");
-    if (eq <= 0) continue;
-    const key = trimmed.slice(0, eq).trim();
-    const val = trimmed.slice(eq + 1).trim();
-    if (key && process.env[key] == null) process.env[key] = val;
-  }
-}
-loadDotEnv();
 const DATA_DIR = process.env.DATA_DIR
   ? path.resolve(process.env.DATA_DIR)
   : path.join(ROOT, "data");
@@ -174,8 +162,21 @@ app.get("/api/wallet/nfts", async (req, res) => {
 // One-shot / manual refresh of minted-out OpenSea trade volumes
 app.post("/api/minted-out/refresh-volumes", async (_req, res) => {
   try {
-    const items = await refreshMintedOutTradeVolumes({ force: true });
-    res.json({ ok: true, count: items.length, items });
+    if (!hasOpenSeaApiKey()) {
+      res.status(503).json({
+        ok: false,
+        error:
+          "OPENSEA_API_KEY not configured — set it in Railway Variables (or local .env) to enable minted-out trade volumes",
+        openSeaApiKey: false,
+      });
+      return;
+    }
+    const result = await refreshMintedOutTradeVolumes({ force: true });
+    res.json({
+      ok: true,
+      openSeaApiKey: true,
+      ...result,
+    });
   } catch (e) {
     console.error("[minted-out/refresh-volumes]", e?.message || e);
     res.status(500).json({ ok: false, error: e.message || String(e) });

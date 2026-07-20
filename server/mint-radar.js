@@ -28,8 +28,19 @@ const OPENSEA_CHAIN = process.env.OPENSEA_CHAIN || "robinhood";
 const CHAIN_ID = Number(process.env.CHAIN_ID) || 4663;
 
 function openSeaApiKey() {
-  return (process.env.OPENSEA_API_KEY || "").trim();
+  // Prefer OPENSEA_API_KEY; accept OPENSEA_KEY alias (common misconfig on Railway)
+  return (
+    process.env.OPENSEA_API_KEY ||
+    process.env.OPENSEA_KEY ||
+    ""
+  ).trim();
 }
+
+/** Public: whether OpenSea REST (meta + trade volume) can run */
+export function hasOpenSeaApiKey() {
+  return Boolean(openSeaApiKey());
+}
+
 /** @deprecated alias — keep internal code readable */
 const BLOCKSCOUT = BLOCKSCOUT_API;
 
@@ -42,35 +53,59 @@ if (BLOCKSCOUT_API_KEY) {
 }
 
 /** Local Clash etc. — Node global fetch ignores proxy env; undici does not. */
-const PROXY_URL = (
-  process.env.HTTPS_PROXY ||
-  process.env.HTTP_PROXY ||
-  process.env.https_proxy ||
-  process.env.http_proxy ||
-  ""
-).trim();
+function proxyUrl() {
+  return (
+    process.env.HTTPS_PROXY ||
+    process.env.HTTP_PROXY ||
+    process.env.https_proxy ||
+    process.env.http_proxy ||
+    ""
+  ).trim();
+}
 
-/** @type {import("undici").ProxyAgent | null} */
-let proxyAgent = null;
-if (PROXY_URL) {
+/** @type {import("undici").ProxyAgent | null | undefined} */
+let proxyAgent = undefined;
+/** @type {string} */
+let proxyAgentUrl = "";
+
+function getProxyAgent() {
+  const url = proxyUrl();
+  if (!url) {
+    proxyAgent = null;
+    proxyAgentUrl = "";
+    return null;
+  }
+  if (proxyAgent !== undefined && proxyAgentUrl === url) return proxyAgent;
   try {
-    proxyAgent = new ProxyAgent(PROXY_URL);
-    console.log(`[mint-radar] outbound HTTP via proxy ${PROXY_URL}`);
+    proxyAgent = new ProxyAgent(url);
+    proxyAgentUrl = url;
+    console.log(`[mint-radar] outbound HTTP via proxy ${url}`);
   } catch (e) {
     console.warn(
-      `[mint-radar] proxy init failed (${PROXY_URL}):`,
+      `[mint-radar] proxy init failed (${url}):`,
       e?.message || e
     );
     proxyAgent = null;
+    proxyAgentUrl = url;
   }
+  return proxyAgent;
 }
 
-/** Fetch Blockscout (and eth-rpc) with optional proxy */
+/** Fetch Blockscout / OpenSea with optional proxy (lazy so .env proxy works) */
 function bsFetch(url, init = {}) {
-  if (proxyAgent) {
-    return undiciFetch(url, { ...init, dispatcher: proxyAgent });
+  const agent = getProxyAgent();
+  if (agent) {
+    return undiciFetch(url, { ...init, dispatcher: agent });
   }
   return globalThis.fetch(url, init);
+}
+
+function formatFetchError(err) {
+  const msg = err?.message || String(err);
+  const cause = err?.cause;
+  if (!cause) return msg;
+  const cMsg = cause.code || cause.message || String(cause);
+  return cMsg && !msg.includes(cMsg) ? `${msg} (${cMsg})` : msg;
 }
 
 /** LP / non-collection NFT contracts to ignore */
@@ -1016,33 +1051,91 @@ const OPENSEA_X_NOISE = new Set([
   "hashtag",
 ]);
 
+/** Serialize OpenSea REST calls — free tier returns 401 "Invalid API key" when bursted. */
+let openSeaRestChain = Promise.resolve();
+let lastOpenSeaRestAt = 0;
+const OPENSEA_REST_MIN_GAP_MS = 350;
+
 /**
  * OpenSea REST JSON.
  * Prefer x-api-key when set (needed for stats/volume; also more reliable for meta).
- * Does not throw solely because key is missing — caller may fall back to HTML scrape.
+ * Serialized + min-gap + retries. Free-tier rate limits often look like HTTP 401.
  */
-async function openSeaFetchJson(url) {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
-  try {
-    const headers = {
-      Accept: "application/json",
-      "User-Agent": "robin-nft-radar/1.0",
-    };
-    const key = openSeaApiKey();
-    if (key) headers["x-api-key"] = key;
-    const res = await bsFetch(url, {
-      signal: ctrl.signal,
-      headers,
-    });
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(text ? `HTTP ${res.status}: ${text.slice(0, 120)}` : `HTTP ${res.status}`);
+async function openSeaFetchJson(url, { retries = 2 } = {}) {
+  const run = async () => {
+    let lastErr = null;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      const gap = Date.now() - lastOpenSeaRestAt;
+      if (gap < OPENSEA_REST_MIN_GAP_MS) {
+        await sleep(OPENSEA_REST_MIN_GAP_MS - gap);
+      }
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+      try {
+        const headers = {
+          Accept: "application/json",
+          "User-Agent": "robin-nft-radar/1.0",
+        };
+        const key = openSeaApiKey();
+        if (key) headers["x-api-key"] = key;
+        lastOpenSeaRestAt = Date.now();
+        const res = await bsFetch(url, {
+          signal: ctrl.signal,
+          headers,
+        });
+        // Free tier: burst traffic may surface as 401 or 429
+        if (res.status === 429 || res.status >= 500 || res.status === 401) {
+          const text = await res.text().catch(() => "");
+          lastErr = new Error(
+            text
+              ? `HTTP ${res.status}: ${text.slice(0, 120)}`
+              : `HTTP ${res.status}`
+          );
+          if (attempt < retries) {
+            const backoff =
+              res.status === 401 || res.status === 429
+                ? 1500 * (attempt + 1)
+                : 400 * (attempt + 1);
+            await sleep(backoff);
+            continue;
+          }
+          throw lastErr;
+        }
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          throw new Error(
+            text
+              ? `HTTP ${res.status}: ${text.slice(0, 120)}`
+              : `HTTP ${res.status}`
+          );
+        }
+        return await res.json();
+      } catch (e) {
+        lastErr = e;
+        const msg = formatFetchError(e);
+        const retryable =
+          /fetch failed|timeout|aborted|ECONN|ENOTFOUND|EAI_AGAIN|UND_ERR|socket|HTTP 401|HTTP 429/i.test(
+            msg
+          );
+        if (attempt < retries && retryable) {
+          await sleep(500 * (attempt + 1));
+          continue;
+        }
+        throw new Error(msg);
+      } finally {
+        clearTimeout(t);
+      }
     }
-    return await res.json();
-  } finally {
-    clearTimeout(t);
-  }
+    throw lastErr || new Error("OpenSea fetch failed");
+  };
+
+  const next = openSeaRestChain.then(run, run);
+  // Keep chain alive even if this request fails
+  openSeaRestChain = next.then(
+    () => undefined,
+    () => undefined
+  );
+  return next;
 }
 
 /**
@@ -1274,15 +1367,40 @@ async function fillTwitterFromHtml(contract, slugHint) {
   }
 }
 
-/** Human label for OpenSea total.volume (ETH). 0 → "0", else "X ETH". */
+/** Dust below 0.0001 ETH → display as 0 (avoid 3.4e-12 style junk). */
+const ETH_DISPLAY_MIN = 0.0001;
+
+/** Human label for OpenSea total.volume / floor (ETH-like). 0 → "0 ETH". */
 function formatTradeVolumeDisplay(volumeEth) {
   if (volumeEth == null || !Number.isFinite(volumeEth)) return null;
-  if (volumeEth === 0) return "0 ETH";
+  // < 万分之一 ETH：按 0 展示，不要科学计数法
+  if (volumeEth === 0 || Math.abs(volumeEth) < ETH_DISPLAY_MIN) return "0 ETH";
   const trim = (s) => s.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
   if (volumeEth >= 100) return `${trim(volumeEth.toFixed(2))} ETH`;
   if (volumeEth >= 1) return `${trim(volumeEth.toFixed(4))} ETH`;
-  if (volumeEth >= 0.0001) return `${trim(volumeEth.toFixed(6))} ETH`;
-  return `${volumeEth} ETH`;
+  return `${trim(volumeEth.toFixed(6))} ETH`;
+}
+
+/** Floor price label — uses OpenSea floor_price_symbol when not ETH. */
+function formatFloorPriceDisplay(floorEth, symbol = "ETH") {
+  if (floorEth == null || !Number.isFinite(floorEth)) return null;
+  const sym = String(symbol || "ETH").trim() || "ETH";
+  // ETH floor: dust under 0.0001 → 0; non-ETH keep more precision for stablecoins etc.
+  const isEth = /^eth$/i.test(sym);
+  if (floorEth === 0 || (isEth && Math.abs(floorEth) < ETH_DISPLAY_MIN)) {
+    return `0 ${sym}`;
+  }
+  const trim = (s) => s.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+  let num;
+  if (floorEth >= 100) num = trim(floorEth.toFixed(2));
+  else if (floorEth >= 1) num = trim(floorEth.toFixed(4));
+  else if (floorEth >= ETH_DISPLAY_MIN || !isEth) {
+    num = trim(floorEth.toFixed(isEth ? 6 : Math.min(6, floorEth < 0.01 ? 4 : 2)));
+    if (!isEth && floorEth < 1) num = trim(floorEth.toFixed(4));
+  } else {
+    num = "0";
+  }
+  return `${num} ${sym}`;
 }
 
 function slugFromOpenseaUrl(url) {
@@ -1318,72 +1436,199 @@ async function resolveCollectionSlug(contract) {
   return null;
 }
 
-async function fetchCollectionTradeVolume(slug) {
+/**
+ * OpenSea collection stats — total volume + floor in one request.
+ * @returns {{ volumeEth: number, volumeDisplay: string, floorEth: number|null, floorDisplay: string|null, floorSymbol: string|null }}
+ */
+async function fetchCollectionMarketStats(slug) {
   const data = await openSeaFetchJson(
     `https://api.opensea.io/api/v2/collections/${encodeURIComponent(slug)}/stats`
   );
-  const raw = data?.total?.volume;
+  // OpenSea returns total.volume as ETH (float). Also accept legacy shapes.
+  const rawVol =
+    data?.total?.volume ??
+    data?.total_volume ??
+    data?.stats?.total_volume ??
+    data?.volume;
   const volumeEth =
-    raw == null || !Number.isFinite(Number(raw)) ? 0 : Number(raw);
+    rawVol == null || rawVol === "" || !Number.isFinite(Number(rawVol))
+      ? 0
+      : Number(rawVol);
+
+  const rawFloor =
+    data?.total?.floor_price ??
+    data?.total?.floor ??
+    data?.stats?.floor_price ??
+    data?.floor_price;
+  const floorSymRaw =
+    data?.total?.floor_price_symbol ??
+    data?.stats?.floor_price_symbol ??
+    data?.floor_price_symbol ??
+    "ETH";
+  const floorSymbol =
+    rawFloor == null || rawFloor === ""
+      ? null
+      : String(floorSymRaw || "ETH").trim() || "ETH";
+  const floorEth =
+    rawFloor == null || rawFloor === "" || !Number.isFinite(Number(rawFloor))
+      ? null
+      : Number(rawFloor);
+
   return {
     volumeEth,
     volumeDisplay: formatTradeVolumeDisplay(volumeEth),
+    floorEth,
+    floorDisplay:
+      floorEth != null
+        ? formatFloorPriceDisplay(floorEth, floorSymbol || "ETH")
+        : null,
+    floorSymbol,
   };
+}
+
+/** @deprecated alias — volume-only callers */
+async function fetchCollectionTradeVolume(slug) {
+  const s = await fetchCollectionMarketStats(slug);
+  return { volumeEth: s.volumeEth, volumeDisplay: s.volumeDisplay };
 }
 
 async function refreshTradeVolumeForContract(contract) {
   const c = String(contract || "").toLowerCase();
   const row = mintedOutArchive.get(c);
-  if (!row) return;
+  if (!row) return { status: "skip" };
+  if (!openSeaApiKey()) {
+    row.tradeVolumeStatus = "no_key";
+    row.tradeVolumeAt = Date.now();
+    scheduleSaveMintedOutArchive();
+    return { status: "no_key" };
+  }
   try {
     const slug = await resolveCollectionSlug(c);
     if (!slug) {
       row.tradeVolumeStatus = "miss";
       row.tradeVolumeAt = Date.now();
-      if (row.tradeVolumeDisplay == null) row.tradeVolumeDisplay = "0 ETH";
+      // Keep prior real volume/floor if any; do not invent "0 ETH"
       scheduleSaveMintedOutArchive();
-      return;
+      return { status: "miss" };
     }
-    const { volumeEth, volumeDisplay } = await fetchCollectionTradeVolume(slug);
-    row.tradeVolumeEth = volumeEth;
-    row.tradeVolumeDisplay = volumeDisplay;
+    // Persist slug on archive for faster next refresh / better OpenSea links
+    if (!row.opensea || /\/contract\//i.test(row.opensea)) {
+      row.opensea = `https://opensea.io/collection/${encodeURIComponent(slug)}`;
+    }
+    const stats = await fetchCollectionMarketStats(slug);
+    row.tradeVolumeEth = stats.volumeEth;
+    row.tradeVolumeDisplay = stats.volumeDisplay;
+    row.floorPriceEth = stats.floorEth;
+    row.floorPriceDisplay = stats.floorDisplay;
+    row.floorPriceSymbol = stats.floorSymbol;
     row.tradeVolumeAt = Date.now();
     row.tradeVolumeStatus = "ok";
     scheduleSaveMintedOutArchive();
+    return {
+      status: "ok",
+      volumeEth: stats.volumeEth,
+      floorEth: stats.floorEth,
+    };
   } catch (e) {
-    row.tradeVolumeStatus = "error";
+    const msg = formatFetchError(e);
+    row.tradeVolumeStatus = /401|403|unauthorized/i.test(msg)
+      ? "auth"
+      : "error";
     row.tradeVolumeAt = Date.now();
-    if (row.tradeVolumeDisplay == null) row.tradeVolumeDisplay = "0 ETH";
-    console.warn(`[mint-radar] trade volume ${short(c)}:`, e.message || e);
+    console.warn(`[mint-radar] trade volume ${short(c)}:`, msg);
+    scheduleSaveMintedOutArchive();
+    return { status: row.tradeVolumeStatus, error: msg };
   }
 }
 
+/**
+ * Refresh OpenSea trade volumes for minted-out archive.
+ * @returns {{ refreshed: number, ok: number, miss: number, error: number, skipped: number, noKey: boolean }}
+ */
 async function refreshAllTradeVolumes({ force = false } = {}) {
-  if (!openSeaApiKey() || !mintedOutArchive.size) return;
+  const summary = {
+    refreshed: 0,
+    ok: 0,
+    miss: 0,
+    error: 0,
+    skipped: 0,
+    noKey: !openSeaApiKey(),
+  };
+  if (!openSeaApiKey() || !mintedOutArchive.size) {
+    if (!openSeaApiKey()) {
+      console.warn(
+        "[mint-radar] trade volume skipped — OPENSEA_API_KEY unset"
+      );
+    }
+    return summary;
+  }
   while (tradeVolumeBusy) await sleep(200);
   tradeVolumeBusy = true;
+  let consecutiveAuthFails = 0;
   try {
-    for (const c of mintedOutArchive.keys()) {
+    // Newest sold-outs first (Map insertion order is roughly oldest-first)
+    const contracts = [...mintedOutArchive.keys()].reverse();
+    for (const c of contracts) {
       const row = mintedOutArchive.get(c);
       const age = Date.now() - (row?.tradeVolumeAt || 0);
-      if (
-        !force &&
+      const missingFloor =
+        row?.floorPriceEth == null && row?.floorPriceDisplay == null;
+      const freshOk =
         row?.tradeVolumeStatus === "ok" &&
-        age < TRADE_VOLUME_TTL_MS
-      ) {
+        age < TRADE_VOLUME_TTL_MS &&
+        !missingFloor;
+      // Back off hard failures briefly so a bad key does not hammer OpenSea
+      const recentFail =
+        (row?.tradeVolumeStatus === "error" ||
+          row?.tradeVolumeStatus === "auth" ||
+          row?.tradeVolumeStatus === "miss") &&
+        age < 60_000;
+      if (!force && (freshOk || recentFail)) {
+        summary.skipped += 1;
         continue;
       }
-      await refreshTradeVolumeForContract(c);
+      const result = await refreshTradeVolumeForContract(c);
+      summary.refreshed += 1;
+      if (result?.status === "ok") {
+        summary.ok += 1;
+        consecutiveAuthFails = 0;
+      } else if (result?.status === "miss") {
+        summary.miss += 1;
+        consecutiveAuthFails = 0;
+      } else if (result?.status === "error" || result?.status === "auth") {
+        summary.error += 1;
+        if (result?.status === "auth") {
+          consecutiveAuthFails += 1;
+          // OpenSea occasionally returns 401 spuriously; only abort after a streak
+          if (consecutiveAuthFails >= 3) {
+            console.warn(
+              "[mint-radar] OpenSea auth failed repeatedly — check OPENSEA_API_KEY; aborting volume pass"
+            );
+            break;
+          }
+        } else {
+          consecutiveAuthFails = 0;
+        }
+      }
       await sleep(TRADE_VOLUME_GAP_MS);
     }
   } finally {
     tradeVolumeBusy = false;
   }
+  if (summary.refreshed) {
+    console.log(
+      `[mint-radar] trade volume pass: ok=${summary.ok} miss=${summary.miss} err=${summary.error} skipped=${summary.skipped}`
+    );
+  }
+  return summary;
 }
 
 function kickTradeVolumeRefresh() {
   refreshAllTradeVolumes().catch((e) => {
-    console.warn("[mint-radar] trade volume refresh:", e.message || e);
+    console.warn(
+      "[mint-radar] trade volume refresh:",
+      formatFetchError(e)
+    );
   });
 }
 
@@ -2382,11 +2627,16 @@ function rememberMintedOut(row) {
     tradeVolumeAt: row.tradeVolumeAt ?? prev.tradeVolumeAt ?? null,
     tradeVolumeStatus:
       row.tradeVolumeStatus ?? prev.tradeVolumeStatus ?? null,
+    floorPriceEth: row.floorPriceEth ?? prev.floorPriceEth ?? null,
+    floorPriceDisplay:
+      row.floorPriceDisplay ?? prev.floorPriceDisplay ?? null,
+    floorPriceSymbol:
+      row.floorPriceSymbol ?? prev.floorPriceSymbol ?? null,
     mintedOut: true,
     archivedAt: prev.archivedAt || Date.now(),
     updatedAt: Date.now(),
   });
-  // First time sold-out hits archive — queue OpenSea volume (30m TTL thereafter)
+  // First time sold-out hits archive — queue OpenSea volume + floor
   if (
     openSeaApiKey() &&
     (prev.tradeVolumeAt == null || prev.tradeVolumeStatus == null)
@@ -2430,11 +2680,37 @@ function collectMintedOut(limit = 50, opts = {}) {
   const n = Math.max(5, Math.min(100, Number(limit) || 50));
   const list = [...mintedOutArchive.values()].map((r) => {
     const m = getMeta(r.contract);
-    const tradeVolumeDisplay =
-      r.tradeVolumeDisplay ??
-      (r.tradeVolumeEth != null
-        ? formatTradeVolumeDisplay(Number(r.tradeVolumeEth))
-        : "0 ETH");
+    // Only format a display string when we actually have a measured volume.
+    // Never invent "0 ETH" for never-fetched rows (UI treats null as pending).
+    let tradeVolumeEth =
+      r.tradeVolumeEth != null && Number.isFinite(Number(r.tradeVolumeEth))
+        ? Number(r.tradeVolumeEth)
+        : null;
+    // Always re-format from numeric eth when known — avoids stale sci-notation
+    // strings left in minted-out.json from older builds.
+    let tradeVolumeDisplay =
+      tradeVolumeEth != null
+        ? formatTradeVolumeDisplay(tradeVolumeEth)
+        : r.tradeVolumeDisplay ?? null;
+    // If status is ok but display missing, coerce 0
+    if (r.tradeVolumeStatus === "ok" && tradeVolumeEth == null) {
+      tradeVolumeEth = 0;
+      tradeVolumeDisplay = formatTradeVolumeDisplay(0);
+    }
+    let floorPriceEth =
+      r.floorPriceEth != null && Number.isFinite(Number(r.floorPriceEth))
+        ? Number(r.floorPriceEth)
+        : null;
+    let floorPriceDisplay =
+      r.floorPriceDisplay ??
+      (floorPriceEth != null
+        ? formatFloorPriceDisplay(
+            floorPriceEth,
+            r.floorPriceSymbol || "ETH"
+          )
+        : null);
+    // Do NOT invent floor=0 just because volume was ok historically — wait for a
+    // stats pass that wrote floorPrice* (refreshTradeVolumeForContract sets both).
     return {
       ...r,
       icon: m.icon || r.icon || null,
@@ -2444,9 +2720,12 @@ function collectMintedOut(limit = 50, opts = {}) {
       website: m.website || null,
       opensea: m.opensea || r.opensea,
       tradeVolumeDisplay,
-      tradeVolumeEth:
-        r.tradeVolumeEth ??
-        (tradeVolumeDisplay === "0 ETH" || tradeVolumeDisplay === "0" ? 0 : null),
+      tradeVolumeEth,
+      tradeVolumeStatus: r.tradeVolumeStatus ?? null,
+      tradeVolumeAt: r.tradeVolumeAt ?? null,
+      floorPriceEth,
+      floorPriceDisplay,
+      floorPriceSymbol: r.floorPriceSymbol ?? null,
       mintedOut: true,
     };
   });
@@ -2455,7 +2734,12 @@ function collectMintedOut(limit = 50, opts = {}) {
   if (openSeaApiKey()) {
     const stale = slice.some((r) => {
       const age = Date.now() - (r.tradeVolumeAt || 0);
-      return r.tradeVolumeAt == null || age >= TRADE_VOLUME_TTL_MS;
+      return (
+        r.tradeVolumeAt == null ||
+        r.tradeVolumeStatus == null ||
+        r.tradeVolumeStatus === "no_key" ||
+        age >= TRADE_VOLUME_TTL_MS
+      );
     });
     if (stale) kickTradeVolumeRefresh();
   }
@@ -2498,6 +2782,22 @@ export function getMintSnapshot(opts = {}) {
   const hot15 = excludeMintedOutRows(
     hotFromScan(by, 15 * 60_000, 10, now)
   );
+
+  /**
+   * King of the Hill — #1 by 1h mint count (same ranking window as hot board).
+   * Always from the 1h leaderboard regardless of ?window= for feed/hot size.
+   */
+  const kingPool = excludeMintedOutRows(
+    hotFromScan(by, 60 * 60_000, Math.max(hotLimit, 5), now)
+  );
+  const king =
+    kingPool[0] && Number(kingPool[0].mints1h || kingPool[0].mints || 0) > 0
+      ? {
+          ...kingPool[0],
+          rule: "mints_1h",
+          ruleLabel: "1h mint count",
+        }
+      : null;
 
   // collectMintedOut would re-harvest; pass archive only (already harvested above)
   const mintedOut = wantMintedOutPayload
@@ -2558,6 +2858,10 @@ export function getMintSnapshot(opts = {}) {
       twitterHtmlQueue: twitterHtmlJobs.length,
       openSeaHtmlEnabled: OPENSEA_HTML_ENABLED,
       memoryDegraded,
+      /** OpenSea REST key present (required for minted-out trade volumes) */
+      openSeaApiKey: hasOpenSeaApiKey(),
+      mintedOutArchiveSize: mintedOutArchive.size,
+      tradeVolumeBusy,
       /** Structured diagnosis for UI alert banner */
       health: computeHealth(),
     },
@@ -2573,6 +2877,8 @@ export function getMintSnapshot(opts = {}) {
     hot,
     hot1m: hot1,
     hot15m: hot15,
+    /** Current 1h mint-count champion (King of the Hill) */
+    king,
     feed: events,
     /** Sticky sold-out history (file-backed; not cleared when events age out) */
     mintedOut,
@@ -2686,19 +2992,29 @@ export async function fetchWalletNfts(address, opts = {}) {
 
 /** Force-refresh OpenSea trade volumes for all minted-out archive entries. */
 export async function refreshMintedOutTradeVolumes({ force = true } = {}) {
-  await refreshAllTradeVolumes({ force });
-  return collectMintedOut(100).map((r) => ({
+  const summary = await refreshAllTradeVolumes({ force });
+  const items = collectMintedOut(100, { skipHarvest: true }).map((r) => ({
     contract: r.contract,
     name: r.name,
     tradeVolumeEth: r.tradeVolumeEth,
     tradeVolumeDisplay: r.tradeVolumeDisplay,
     tradeVolumeStatus: r.tradeVolumeStatus,
     tradeVolumeAt: r.tradeVolumeAt,
+    floorPriceEth: r.floorPriceEth,
+    floorPriceDisplay: r.floorPriceDisplay,
+    floorPriceSymbol: r.floorPriceSymbol,
   }));
+  return {
+    count: items.length,
+    summary,
+    items,
+  };
 }
 
 export function startMintRadar() {
   if (pollTimer) return;
+  // Init proxy once logs are about to start (env already loaded via load-env.js)
+  getProxyAgent();
   loadMintedOutArchive();
   trimMintedOutArchive();
   console.log("[mint-radar] starting (Blockscout poll)");
@@ -2710,13 +3026,20 @@ export function startMintRadar() {
     console.log(
       "[mint-radar] OpenSea API key enabled (meta + minted-out 交易额)"
     );
-    setTimeout(() => kickTradeVolumeRefresh(), 8000);
+    // First pass shortly after boot (archive already loaded)
+    setTimeout(() => kickTradeVolumeRefresh(), 5000);
     tradeVolumeTimer = setInterval(() => {
-      refreshAllTradeVolumes({ force: true }).catch(() => {});
+      refreshAllTradeVolumes({ force: true }).catch((e) => {
+        console.warn(
+          "[mint-radar] trade volume interval:",
+          formatFetchError(e)
+        );
+      });
     }, TRADE_VOLUME_TTL_MS);
+    tradeVolumeTimer.unref?.();
   } else {
     console.warn(
-      "[mint-radar] OPENSEA_API_KEY unset — collection meta limited; set key for Twitter REST + 交易额"
+      "[mint-radar] OPENSEA_API_KEY unset — minted-out 交易额 disabled. Set Railway Variable OPENSEA_API_KEY (OpenSea free API key)."
     );
   }
   if (!OPENSEA_HTML_ENABLED) {

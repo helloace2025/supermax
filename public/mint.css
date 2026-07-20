@@ -191,18 +191,308 @@ a:hover {
   flex-shrink: 0;
 }
 
+/* —— King of the Hill — center card, height matches brand+controls stack —— */
+.koth {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  justify-content: center;
+  align-items: stretch;
+  align-self: stretch;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 0 8px;
+}
+
+.koth-inner {
+  --koth-fill: linear-gradient(
+    160deg,
+    color-mix(in srgb, #fbbf24 14%, var(--panel)) 0%,
+    var(--panel) 58%
+  );
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: stretch;
+  align-self: stretch;
+  gap: 10px;
+  width: max-content;
+  max-width: min(460px, 100%);
+  height: 100%;
+  min-height: 100%;
+  box-sizing: border-box;
+  padding: 12px 18px 14px;
+  border-radius: 14px;
+  border: none;
+  overflow: hidden;
+  background: transparent;
+  box-shadow:
+    var(--shadow),
+    0 0 18px color-mix(in srgb, #fbbf24 22%, transparent),
+    0 0 36px color-mix(in srgb, #fbbf24 10%, transparent);
+}
+
+/* Spinning border light — travels along the outer edge */
+.koth-inner::before {
+  content: "";
+  position: absolute;
+  inset: -45%;
+  z-index: 0;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg 255deg,
+    color-mix(in srgb, #fbbf24 15%, transparent) 280deg,
+    #fbbf24 300deg,
+    #fde68a 318deg,
+    #38bdf8 335deg,
+    color-mix(in srgb, #38bdf8 20%, transparent) 350deg,
+    transparent 360deg
+  );
+  animation: koth-border-spin 2.6s linear infinite;
+  pointer-events: none;
+}
+
+/* Soft outer bloom that follows the spin (blurred twin) */
+.koth-inner::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  z-index: 0;
+  border-radius: 12px;
+  background: var(--koth-fill);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #fbbf24 18%, transparent);
+  pointer-events: none;
+}
+
+/* Content above the border layers */
+.koth-inner > * {
+  position: relative;
+  z-index: 1;
+}
+
+@keyframes koth-border-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Empty state: no spin, quieter dashed edge */
+.koth[data-has-king="0"] .koth-inner {
+  justify-content: center;
+  align-items: center;
+  width: auto;
+  min-width: 180px;
+  opacity: 0.88;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  border: 1px dashed color-mix(in srgb, #fbbf24 36%, var(--line));
+  background: var(--koth-fill);
+}
+
+.koth[data-has-king="0"] .koth-inner::before,
+.koth[data-has-king="0"] .koth-inner::after {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .koth-inner::before {
+    animation: none;
+    /* Static gold rim when motion is reduced */
+    inset: 0;
+    background: linear-gradient(
+      135deg,
+      color-mix(in srgb, #fbbf24 70%, transparent),
+      color-mix(in srgb, #38bdf8 45%, transparent),
+      color-mix(in srgb, #fbbf24 55%, transparent)
+    );
+  }
+}
+
+.koth-empty {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* Row 1: crown + title */
+.koth-head {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.koth-crown {
+  font-size: 0.95rem;
+  line-height: 1;
+  flex-shrink: 0;
+  filter: drop-shadow(0 1px 3px rgba(251, 191, 36, 0.4));
+}
+
+.koth-title {
+  font-family: var(--sans);
+  font-weight: 800;
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #fbbf24;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* Row 2: avatar + name + 1h (no symbol — more room for title) */
+.koth-body {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  min-height: 2.4em;
+  padding: 2px 0 1px;
+}
+
+.koth-hero {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 auto;
+  max-width: none;
+}
+
+.koth-hero .avatar-wrap {
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+}
+
+.koth-hero .avatar,
+.koth-hero .avatar.ph {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  font-size: 0.88rem;
+}
+
+.koth-name {
+  font-family: var(--sans);
+  font-weight: 700;
+  font-size: 1rem;
+  line-height: 1.35;
+  color: var(--text);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+  max-width: none;
+  padding: 2px 0;
+}
+
+.koth-name:hover {
+  color: #fbbf24;
+}
+
+.koth-mints {
+  font-family: var(--mono);
+  font-weight: 800;
+  font-size: 0.88rem;
+  line-height: 1.3;
+  color: #fbbf24;
+  flex-shrink: 0;
+  white-space: nowrap;
+  margin-left: auto;
+  padding: 4px 0 4px 12px;
+  border-left: 1px solid color-mix(in srgb, #fbbf24 28%, var(--line));
+  align-self: center;
+}
+
+.koth-mints-unit {
+  font-weight: 600;
+  font-size: 0.66rem;
+  color: var(--muted);
+  margin-left: 2px;
+}
+
+html[data-theme="light"] .koth-title,
+html[data-theme="light"] .koth-mints {
+  color: #b45309;
+}
+
+html[data-theme="light"] .koth-name:hover {
+  color: #b45309;
+}
+
 .top {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 18px;
+  align-items: stretch;
+  gap: 12px 16px;
+  margin-bottom: 14px;
+}
+
+/* Brand + Favorites/Blocked/Refresh stacked — defines KOTH card height */
+.top-left {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+  flex-shrink: 0;
+  min-width: 0;
 }
 
 .brand {
   display: flex;
   gap: 14px;
   align-items: center;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+@media (max-width: 1100px) {
+  .top {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+  .top-left {
+    flex: 1 1 auto;
+  }
+  .koth {
+    order: 3;
+    flex: 1 1 100%;
+    justify-content: center;
+    align-self: auto;
+    padding: 2px 0 0;
+  }
+  .koth-inner {
+    height: auto;
+    min-height: 0;
+    align-self: center;
+    padding: 8px 14px;
+  }
+  .top-actions {
+    margin-left: auto;
+    align-self: flex-start;
+  }
+}
+
+@media (max-width: 520px) {
+  .koth-title {
+    display: none;
+  }
+  .koth-inner {
+    max-width: 100%;
+    padding: 10px 14px 12px;
+    gap: 8px;
+  }
+  .koth-name {
+    font-size: 0.95rem;
+  }
 }
 
 .logo {
@@ -245,6 +535,8 @@ h1 {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex-shrink: 0;
+  align-self: flex-start;
 }
 
 /* Quiet text links in header — less noise than footer icons */
@@ -1338,8 +1630,13 @@ html[data-theme="light"] .wallet-btn.is-connected {
   flex-wrap: wrap;
   justify-content: flex-start;
   gap: 12px;
-  margin-bottom: 14px;
+  margin-bottom: 0;
   align-items: center;
+}
+
+/* When controls live under brand in top-left, no extra bottom gap */
+.top-left .controls {
+  margin-bottom: 0;
 }
 
 .seg {
@@ -1691,13 +1988,30 @@ html[data-theme="light"] .data-health-banner {
 
 .layout {
   display: grid;
-  grid-template-columns: 1.45fr 1fr;
+  grid-template-columns: 1.45fr minmax(260px, 1fr);
   grid-template-rows: minmax(0, 1fr); /* force one full-height row */
   gap: 14px;
   flex: 1 1 auto;
   min-height: 0;
   width: 100%;
   align-items: stretch;
+  transition: grid-template-columns 0.2s ease;
+}
+
+/* Both side panels open — default */
+.layout[data-feed-open="1"][data-out-open="1"] {
+  grid-template-columns: 1.45fr minmax(260px, 1fr);
+}
+
+/* Only one side panel open — give hot more room */
+.layout[data-feed-open="1"][data-out-open="0"],
+.layout[data-feed-open="0"][data-out-open="1"] {
+  grid-template-columns: 1.65fr minmax(240px, 0.85fr);
+}
+
+/* Both collapsed — hot full width + thin restore rails */
+.layout[data-feed-open="0"][data-out-open="0"] {
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .panel {
@@ -1731,6 +2045,7 @@ html[data-theme="light"] .data-health-banner {
   min-height: 0;
   height: 100%;
   max-height: 100%;
+  min-width: 0;
 }
 
 .right-col > .panel {
@@ -1740,14 +2055,42 @@ html[data-theme="light"] .data-health-banner {
   max-height: none;
 }
 
+/* When only one panel open, it takes the full right column */
+.layout[data-feed-open="1"][data-out-open="0"] .feed-panel,
+.layout[data-feed-open="0"][data-out-open="1"] .out-panel {
+  flex: 1 1 auto;
+}
+
+.layout[data-feed-open="0"][data-out-open="0"] .right-col {
+  flex-direction: column;
+  gap: 8px;
+  width: auto;
+  min-width: 0;
+  justify-content: flex-start;
+}
+
+/* Collapsed panel: hide content, keep out of flex growth */
+.panel.is-collapsed {
+  display: none !important;
+}
+
 .panel-head {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
+  align-items: center;
   gap: 10px;
-  padding: 14px 16px 10px;
+  padding: 14px 12px 10px 16px;
   border-bottom: 1px solid var(--line);
   flex: 0 0 auto;
+}
+
+.panel-head-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 12px;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .panel-head h2 {
@@ -1759,10 +2102,166 @@ html[data-theme="light"] .data-health-banner {
   letter-spacing: 0;
 }
 
+/* Collapse toggle (chevron) */
+.col-toggle {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 80%, transparent);
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    border-color 0.15s,
+    background 0.15s;
+}
+
+.col-toggle:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--text) 22%, var(--line));
+  background: var(--icon-hover, color-mix(in srgb, var(--line) 40%, transparent));
+}
+
+.col-toggle-icon {
+  display: block;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg); /* points right = collapse toward edge */
+  margin-left: -2px;
+  transition: transform 0.15s ease;
+}
+
+/* Restore rail when column is collapsed */
+.col-rail {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  min-height: 88px;
+  padding: 12px 8px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  cursor: pointer;
+  font-family: var(--ui);
+  transition:
+    border-color 0.15s,
+    background 0.15s,
+    color 0.15s;
+}
+
+.col-rail:hover {
+  border-color: color-mix(in srgb, #5eead4 45%, var(--line));
+  background: color-mix(in srgb, #5eead4 8%, var(--panel));
+}
+
+.col-rail.is-visible {
+  display: flex;
+}
+
+.layout[data-feed-open="0"][data-out-open="0"] .col-rail.is-visible {
+  flex: 1 1 0;
+  min-height: 0;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  padding: 14px 10px;
+  gap: 12px;
+}
+
+.col-rail-icon {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.col-rail-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.layout[data-feed-open="0"][data-out-open="0"] .col-rail-label {
+  letter-spacing: 0.12em;
+}
+
+/* When only one side collapsed, rail sits as a slim bar above/below the open panel */
+.layout[data-feed-open="0"][data-out-open="1"] .col-rail[data-col="feed"].is-visible,
+.layout[data-feed-open="1"][data-out-open="0"] .col-rail[data-col="out"].is-visible {
+  flex-direction: row;
+  min-height: 0;
+  padding: 8px 12px;
+  writing-mode: horizontal-tb;
+}
+
 .hint {
   color: var(--muted);
   font-size: 0.75rem;
   font-family: var(--mono);
+}
+
+/* Minted-out sort — sits in panel-head (right of title, left of collapse) */
+.out-panel .panel-head {
+  gap: 8px;
+}
+
+.out-sort {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
+}
+
+.out-sort-btn {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--ui);
+  font-size: 0.68rem;
+  font-weight: 650;
+  padding: 3px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    color 0.12s,
+    border-color 0.12s,
+    background 0.12s;
+}
+
+.out-sort-btn:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--text) 20%, var(--line));
+}
+
+.out-sort-btn.is-active {
+  color: var(--text);
+  border-color: color-mix(in srgb, #5eead4 50%, var(--line));
+  background: color-mix(in srgb, #5eead4 12%, transparent);
+}
+
+html[data-theme="light"] .out-sort-btn.is-active {
+  border-color: color-mix(in srgb, #0d9488 40%, var(--line));
+  background: color-mix(in srgb, #0d9488 10%, transparent);
+}
+
+@media (max-width: 520px) {
+  .out-sort-btn {
+    padding: 3px 6px;
+    font-size: 0.64rem;
+  }
 }
 
 .table-wrap {
@@ -2966,14 +3465,23 @@ html[data-theme="light"] .mint-out-label {
   letter-spacing: 0.03em;
 }
 
-.out-meta .trade-volume {
+.out-meta .trade-volume,
+.out-meta .floor-price {
   color: var(--text);
   font-weight: 600;
   white-space: nowrap;
 }
 
+.out-meta .floor-price {
+  color: color-mix(in srgb, #fbbf24 75%, var(--text));
+}
+
 html[data-theme="light"] .out-meta .pill-out {
   color: #e11d48;
+}
+
+html[data-theme="light"] .out-meta .floor-price {
+  color: #b45309;
 }
 
 .feed-item {
@@ -3180,8 +3688,29 @@ html[data-theme="light"] .out-meta .pill-out {
     min-height: 0;
     overflow: auto; /* if both panels need space, scroll the layout area only */
   }
+  .layout[data-feed-open="0"][data-out-open="0"],
+  .layout[data-feed-open="1"][data-out-open="0"],
+  .layout[data-feed-open="0"][data-out-open="1"] {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+  .layout[data-feed-open="0"][data-out-open="0"] .right-col {
+    flex-direction: row;
+    width: 100%;
+    min-height: 0;
+  }
+  .layout[data-feed-open="0"][data-out-open="0"] .col-rail.is-visible {
+    flex: 1 1 0;
+    writing-mode: horizontal-tb;
+    text-orientation: mixed;
+    min-height: 44px;
+    padding: 10px 12px;
+  }
   .right-col {
     min-height: 50vh;
+  }
+  .layout[data-feed-open="0"][data-out-open="0"] .right-col {
+    min-height: 0;
   }
   .layout,
   .feed,

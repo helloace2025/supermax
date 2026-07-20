@@ -18,7 +18,7 @@
         }
       })();
     </script>
-    <link rel="stylesheet" href="/mint.css?v=77" />
+    <link rel="stylesheet" href="/mint.css?v=91" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -31,25 +31,53 @@
     <div class="bg-glow"></div>
 
     <header class="top">
-      <div class="brand">
-        <img class="logo" src="/brand/logo-mark.svg" width="48" height="48" alt="ROBIN NFT Radar" />
-        <div>
-          <h1 data-i18n="brandTitle">ROBIN NFT Radar</h1>
-          <p class="sub sub-slim">
-            <span class="sub-tagline" data-i18n="brandSub">Robinhood Chain · 实时铸造热度</span>
-            <a
-              id="blockscoutStatusChip"
-              class="blockscout-status-chip"
-              href="https://robinhoodchain.blockscout.com/"
-              target="_blank"
-              rel="noopener noreferrer"
-              hidden
-              role="status"
-              title=""
-            ></a>
-          </p>
+      <!-- Left stack: brand + Favorites/Blocked/Refresh — KOTH matches this height -->
+      <div class="top-left">
+        <div class="brand">
+          <img class="logo" src="/brand/logo-mark.svg" width="48" height="48" alt="ROBIN NFT Radar" />
+          <div>
+            <h1 data-i18n="brandTitle">ROBIN NFT Radar</h1>
+            <p class="sub sub-slim">
+              <span class="sub-tagline" data-i18n="brandSub">Robinhood Chain · 实时铸造热度</span>
+              <a
+                id="blockscoutStatusChip"
+                class="blockscout-status-chip"
+                href="https://robinhoodchain.blockscout.com/"
+                target="_blank"
+                rel="noopener noreferrer"
+                hidden
+                role="status"
+                title=""
+              ></a>
+            </p>
+          </div>
         </div>
+        <section class="controls">
+          <div class="controls-right">
+            <div class="fav-wrap">
+              <button type="button" class="btn btn-muted" id="btnFavorites" data-i18n="favBtn">
+                已收藏 · 0
+              </button>
+            </div>
+            <div class="blocked-wrap">
+              <button type="button" class="btn btn-muted" id="btnBlocked" data-i18n="blockedBtn">
+                已屏蔽 · 0
+              </button>
+            </div>
+            <div class="refresh-wrap">
+              <button type="button" class="btn" id="btnRefresh" data-i18n="refresh">立即刷新</button>
+            </div>
+          </div>
+        </section>
       </div>
+      <!-- King of the Hill — bottom edge aligns with Favorites / Blocked / Refresh -->
+      <section class="koth" id="koth" aria-live="polite">
+        <div class="koth-inner" id="kothInner">
+          <div class="koth-empty" id="kothEmpty" data-i18n="kothEmpty">
+            正在争夺山巅之王…
+          </div>
+        </div>
+      </section>
       <div class="top-actions">
         <nav class="top-links" aria-label="Links">
           <a
@@ -120,24 +148,6 @@
       </div>
     </header>
 
-    <section class="controls">
-      <div class="controls-right">
-        <div class="fav-wrap">
-          <button type="button" class="btn btn-muted" id="btnFavorites" data-i18n="favBtn">
-            已收藏 · 0
-          </button>
-        </div>
-        <div class="blocked-wrap">
-          <button type="button" class="btn btn-muted" id="btnBlocked" data-i18n="blockedBtn">
-            已屏蔽 · 0
-          </button>
-        </div>
-        <div class="refresh-wrap">
-          <button type="button" class="btn" id="btnRefresh" data-i18n="refresh">立即刷新</button>
-        </div>
-      </div>
-    </section>
-
     <!-- Blockscout / pipeline alert — shown when explorer poll fails or data stalls -->
     <div
       id="dataHealthBanner"
@@ -175,7 +185,7 @@
       </div>
     </div>
 
-    <main class="layout">
+    <main class="layout" id="mainLayout" data-feed-open="1" data-out-open="1">
       <section class="panel hot-panel">
         <div class="panel-head">
           <h2 data-i18n="hotTitle">🔥 铸造热榜</h2>
@@ -247,19 +257,88 @@
         </div>
       </section>
 
-      <div class="right-col">
-        <section class="panel feed-panel">
+      <div class="right-col" id="rightCol">
+        <!-- Collapsed rail: restore feed -->
+        <button
+          type="button"
+          class="col-rail"
+          id="railFeed"
+          data-col="feed"
+          hidden
+          aria-controls="feedPanel"
+        >
+          <span class="col-rail-icon" aria-hidden="true">⚡</span>
+          <span class="col-rail-label" data-i18n="feedTitleShort">实时流</span>
+        </button>
+        <section class="panel feed-panel" id="feedPanel" data-col="feed">
           <div class="panel-head">
-            <h2 data-i18n="feedTitle">⚡ 实时铸造流</h2>
-            <span class="hint" data-i18n="feedHint">from 0x0 · ERC-721</span>
+            <div class="panel-head-main">
+              <h2 data-i18n="feedTitle">⚡ 实时铸造流</h2>
+              <span class="hint" data-i18n="feedHint">from 0x0 · ERC-721</span>
+            </div>
+            <button
+              type="button"
+              class="col-toggle"
+              id="btnCollapseFeed"
+              data-col="feed"
+              data-i18n-aria="collapseFeed"
+              aria-expanded="true"
+              aria-controls="feed"
+              title="折叠"
+            >
+              <span class="col-toggle-icon" aria-hidden="true"></span>
+            </button>
           </div>
           <div class="feed hide-scrollbar" id="feed"></div>
         </section>
 
-        <section class="panel out-panel">
+        <!-- Collapsed rail: restore minted-out -->
+        <button
+          type="button"
+          class="col-rail"
+          id="railOut"
+          data-col="out"
+          hidden
+          aria-controls="outPanel"
+        >
+          <span class="col-rail-icon" aria-hidden="true">🏁</span>
+          <span class="col-rail-label" data-i18n="outTitleShort">已铸完</span>
+        </button>
+        <section class="panel out-panel" id="outPanel" data-col="out">
           <div class="panel-head">
-            <h2 data-i18n="outTitle">🏁 已铸完</h2>
-            <span class="hint" data-i18n="outHint">MINT OUT · 仍可跟进</span>
+            <div class="panel-head-main">
+              <h2 data-i18n="outTitle">🏁 已铸完</h2>
+              <span class="hint" data-i18n="outHint">MINT OUT · 仍可跟进</span>
+            </div>
+            <div
+              class="out-sort"
+              id="outSort"
+              role="group"
+              data-i18n-aria="outSortGroup"
+              aria-label="已铸完排序"
+            >
+              <button type="button" class="out-sort-btn is-active" data-out-sort="recent" data-i18n="outSortRecent">
+                最近
+              </button>
+              <button type="button" class="out-sort-btn" data-out-sort="volume" data-i18n="outSortVolume">
+                交易额
+              </button>
+              <button type="button" class="out-sort-btn" data-out-sort="floor" data-i18n="outSortFloor">
+                地板价
+              </button>
+            </div>
+            <button
+              type="button"
+              class="col-toggle"
+              id="btnCollapseOut"
+              data-col="out"
+              data-i18n-aria="collapseOut"
+              aria-expanded="true"
+              aria-controls="mintedOut"
+              title="折叠"
+            >
+              <span class="col-toggle-icon" aria-hidden="true"></span>
+            </button>
           </div>
           <div class="feed hide-scrollbar" id="mintedOut"></div>
         </section>
@@ -392,6 +471,6 @@
       </div>
     </div>
 
-    <script src="/mint.js?v=78"></script>
+    <script src="/mint.js?v=91"></script>
   </body>
 </html>

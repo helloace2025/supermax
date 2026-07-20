@@ -45,6 +45,7 @@ This repo is already wired for Railway:
 | `BLOCKSCOUT_BASE` | No | Default public Robinhood Blockscout |
 | `BLOCKSCOUT_API_KEY` | No | If you use Blockscout PRO |
 | `OPENSEA_CHAIN` | No | Default `robinhood` |
+| `OPENSEA_API_KEY` | **Yes for 交易额** | OpenSea free API key — required for minted-out trade volumes + collection meta. Without it, volumes stay empty. |
 | `HTTPS_PROXY` / `HTTP_PROXY` | No | **Leave unset** on Railway (local Clash only) |
 
 ### Ops notes

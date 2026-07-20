@@ -7,6 +7,10 @@
   const FAV_KEY = "mint-radar-favorites";
   const FAV_META_KEY = "mint-radar-favorites-meta";
   const PRICE_FILTER_KEY = "mint-radar-price-filter";
+  /** Side columns: feed / minted-out open state (hot is always open) */
+  const COL_LAYOUT_KEY = "mint-radar-col-layout-v1";
+  /** Minted-out list sort: recent | volume | floor */
+  const OUT_SORT_KEY = "mint-radar-out-sort-v1";
   /** address -> { [roundKey]: true } — which win notices were opened */
   const RAFFLE_READ_KEY = "mint-radar-raffle-read-v1";
 
@@ -25,6 +29,21 @@
    * Before any GitHub push: review new lines with the user first.
    */
   const UPDATES = [
+    {
+      date: "2026-07-21",
+      zh: "已铸完排序：可按最近 / 交易额 / 地板价排列，方便找有成交的项目",
+      en: "Minted-out sort — by recent, volume, or floor to surface traded collections",
+    },
+    {
+      date: "2026-07-21",
+      zh: "布局：热榜固定；实时流 / 已铸完可折叠，状态会记住",
+      en: "Layout — hot board fixed; live feed & minted-out collapsible (remembered)",
+    },
+    {
+      date: "2026-07-20",
+      zh: "山巅之王：中间展示 1 小时 mint 数量最多的集合；已铸完增加地板价 + 交易额",
+      en: "King of the Hill — top 1h mint count center stage; minted-out shows floor + volume",
+    },
     {
       date: "2026-07-14",
       zh: "已铸完交易额：OpenSea 总成交额每 15 分钟更新，显示为「交易额：X ETH」",
@@ -148,11 +167,22 @@
       hotLoading: "正在拉取链上 mint…",
       hotEmpty: "暂无铸造数据（或仍在预热缓存）…",
       feedTitle: "⚡ 实时铸造流",
+      feedTitleShort: "实时流",
       feedHint: "from 0x0 · ERC-721",
       feedEmpty: "暂无铸造事件",
       outTitle: "🏁 已铸完",
+      outTitleShort: "已铸完",
       outHint: "MINT OUT · 仍可跟进",
       outEmpty: "暂无已铸完项目",
+      outSortLabel: "排序",
+      outSortGroup: "已铸完排序",
+      outSortRecent: "最近",
+      outSortVolume: "交易额",
+      outSortFloor: "地板价",
+      collapseFeed: "折叠实时流",
+      expandFeed: "展开实时流",
+      collapseOut: "折叠已铸完",
+      expandOut: "展开已铸完",
       statusWaiting: "等待数据…",
       footerNote: "数据源：Blockscout REST · 无需自建节点（后续可升级 RPC eth_getLogs）",
       justNow: "刚刚",
@@ -204,6 +234,16 @@
       socialOff: (title) => `${title}（未检测到）`,
       minter: "minter",
       tradeVolume: "交易额",
+      floorPrice: "地板价",
+      kothTitle: "山巅之王",
+      kothSub: "1 小时 mint 数量冠军",
+      kothEmpty: "正在争夺山巅之王…",
+      kothMints1h: "1h mint",
+      kothMints5m: "5m",
+      kothMints30m: "30m",
+      kothHolders: "Holders",
+      kothProgress: "进度",
+      kothPrice: "价格",
       blockTitle: "屏蔽此项目",
       googleSearchTitle: "Google 搜图",
       walletDisconnect: "退出钱包",
@@ -306,11 +346,22 @@
       hotLoading: "Loading on-chain mints…",
       hotEmpty: "No mint data yet (or still warming cache)…",
       feedTitle: "⚡ Live mint feed",
+      feedTitleShort: "Live feed",
       feedHint: "from 0x0 · ERC-721",
       feedEmpty: "No mint events yet",
       outTitle: "🏁 Minted Out",
+      outTitleShort: "Minted out",
       outHint: "MINT OUT · still trackable",
       outEmpty: "No sold-out collections yet",
+      outSortLabel: "Sort",
+      outSortGroup: "Minted-out sort",
+      outSortRecent: "Recent",
+      outSortVolume: "Volume",
+      outSortFloor: "Floor",
+      collapseFeed: "Collapse live feed",
+      expandFeed: "Expand live feed",
+      collapseOut: "Collapse minted-out",
+      expandOut: "Expand minted-out",
       statusWaiting: "Waiting for data…",
       footerNote:
         "Source: Blockscout REST · No self-hosted node (RPC eth_getLogs later)",
@@ -362,6 +413,16 @@
       socialOff: (title) => `${title} (not found)`,
       minter: "minter",
       tradeVolume: "Volume",
+      floorPrice: "Floor",
+      kothTitle: "King of the Hill",
+      kothSub: "Top collection by 1h mint count",
+      kothEmpty: "Waiting for a hill king…",
+      kothMints1h: "1h mints",
+      kothMints5m: "5m",
+      kothMints30m: "30m",
+      kothHolders: "Holders",
+      kothProgress: "Progress",
+      kothPrice: "Price",
       blockTitle: "Block this collection",
       googleSearchTitle: "Google image search",
       walletDisconnect: "Disconnect",
@@ -422,6 +483,8 @@
   let theme = detectTheme();
   /** @type {"all"|"free"|"paid"} */
   let priceFilter = loadPriceFilter();
+  /** @type {"recent"|"volume"|"floor"} */
+  let outSort = loadOutSort();
   let timer = null;
   let lastFeedKeys = new Set();
   /** last successful API payload — re-render on language switch */
@@ -435,6 +498,8 @@
   const localMintedOut = new Map();
   /** Signature of contracts currently painted in #mintedOut */
   let mintedOutPaintSig = "";
+  /** Avoid re-painting KOTH when champion + key stats unchanged */
+  let kothPaintSig = "";
   /** After first successful bootstrap of mintedOut from API, later polls use out=0 */
   let mintedOutBootstrapped = false;
   let blockedPanelOpen = false;
@@ -459,9 +524,18 @@
 
   const els = {
     btnWallet: $("btnWallet"),
+    mainLayout: $("mainLayout"),
+    feedPanel: $("feedPanel"),
+    outPanel: $("outPanel"),
+    railFeed: $("railFeed"),
+    railOut: $("railOut"),
+    btnCollapseFeed: $("btnCollapseFeed"),
+    btnCollapseOut: $("btnCollapseOut"),
     hotBody: $("hotBody"),
     feed: $("feed"),
     mintedOut: $("mintedOut"),
+    koth: $("koth"),
+    kothInner: $("kothInner"),
     statusLine: $("statusLine"),
     btnRefresh: $("btnRefresh"),
     btnBlocked: $("btnBlocked"),
@@ -807,6 +881,108 @@
     return v != null ? v : key;
   }
 
+  function loadColLayout() {
+    try {
+      const raw = localStorage.getItem(COL_LAYOUT_KEY);
+      if (!raw) return { feed: true, out: true };
+      const o = JSON.parse(raw);
+      return {
+        feed: o?.feed !== false,
+        out: o?.out !== false,
+      };
+    } catch {
+      return { feed: true, out: true };
+    }
+  }
+
+  /** @type {{ feed: boolean, out: boolean }} */
+  let colLayout = loadColLayout();
+
+  function persistColLayout() {
+    try {
+      localStorage.setItem(COL_LAYOUT_KEY, JSON.stringify(colLayout));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function syncColToggleLabels() {
+    if (els.btnCollapseFeed) {
+      const open = colLayout.feed;
+      els.btnCollapseFeed.setAttribute("aria-expanded", open ? "true" : "false");
+      const label = open ? t("collapseFeed") : t("expandFeed");
+      els.btnCollapseFeed.setAttribute("aria-label", label);
+      els.btnCollapseFeed.title = label;
+    }
+    if (els.btnCollapseOut) {
+      const open = colLayout.out;
+      els.btnCollapseOut.setAttribute("aria-expanded", open ? "true" : "false");
+      const label = open ? t("collapseOut") : t("expandOut");
+      els.btnCollapseOut.setAttribute("aria-label", label);
+      els.btnCollapseOut.title = label;
+    }
+    if (els.railFeed) {
+      els.railFeed.title = t("expandFeed");
+      els.railFeed.setAttribute("aria-label", t("expandFeed"));
+    }
+    if (els.railOut) {
+      els.railOut.title = t("expandOut");
+      els.railOut.setAttribute("aria-label", t("expandOut"));
+    }
+  }
+
+  function applyColLayout() {
+    const layout = els.mainLayout || document.querySelector(".layout");
+    if (!layout) return;
+    layout.dataset.feedOpen = colLayout.feed ? "1" : "0";
+    layout.dataset.outOpen = colLayout.out ? "1" : "0";
+
+    if (els.feedPanel) {
+      els.feedPanel.classList.toggle("is-collapsed", !colLayout.feed);
+    }
+    if (els.outPanel) {
+      els.outPanel.classList.toggle("is-collapsed", !colLayout.out);
+    }
+    if (els.railFeed) {
+      els.railFeed.hidden = colLayout.feed;
+      els.railFeed.classList.toggle("is-visible", !colLayout.feed);
+    }
+    if (els.railOut) {
+      els.railOut.hidden = colLayout.out;
+      els.railOut.classList.toggle("is-visible", !colLayout.out);
+    }
+    syncColToggleLabels();
+  }
+
+  function setColOpen(col, open) {
+    if (col === "feed") colLayout.feed = !!open;
+    else if (col === "out") colLayout.out = !!open;
+    else return;
+    persistColLayout();
+    applyColLayout();
+  }
+
+  function toggleCol(col) {
+    if (col === "feed") setColOpen("feed", !colLayout.feed);
+    else if (col === "out") setColOpen("out", !colLayout.out);
+  }
+
+  function bindColLayoutUi() {
+    if (els.btnCollapseFeed) {
+      els.btnCollapseFeed.addEventListener("click", () => toggleCol("feed"));
+    }
+    if (els.btnCollapseOut) {
+      els.btnCollapseOut.addEventListener("click", () => toggleCol("out"));
+    }
+    if (els.railFeed) {
+      els.railFeed.addEventListener("click", () => setColOpen("feed", true));
+    }
+    if (els.railOut) {
+      els.railOut.addEventListener("click", () => setColOpen("out", true));
+    }
+    applyColLayout();
+  }
+
   function applyStaticI18n() {
     const pack = I18N[lang] || I18N.zh;
     document.documentElement.lang = pack.htmlLang;
@@ -832,6 +1008,8 @@
     updateFavoritesUi();
     renderUpdatesList();
     syncPriceFilterUi();
+    syncColToggleLabels();
+    syncOutSortUi();
     if (typeof window.__renderRaffleModal === "function") {
       window.__renderRaffleModal();
     }
@@ -1396,16 +1574,41 @@
     if (!c || c.length < 10) return false;
     const prev = localMintedOut.get(c);
     if (prev) {
-      const volChanged =
+      const marketChanged =
         r.tradeVolumeDisplay !== prev.tradeVolumeDisplay ||
-        Number(r.tradeVolumeAt || 0) !== Number(prev.tradeVolumeAt || 0);
-      if (!volChanged) return false;
+        r.tradeVolumeStatus !== prev.tradeVolumeStatus ||
+        Number(r.tradeVolumeEth ?? NaN) !== Number(prev.tradeVolumeEth ?? NaN) ||
+        Number(r.tradeVolumeAt || 0) !== Number(prev.tradeVolumeAt || 0) ||
+        r.floorPriceDisplay !== prev.floorPriceDisplay ||
+        Number(r.floorPriceEth ?? NaN) !== Number(prev.floorPriceEth ?? NaN);
+      if (!marketChanged) return false;
       localMintedOut.set(c, {
         ...prev,
-        tradeVolumeEth: r.tradeVolumeEth ?? prev.tradeVolumeEth,
-        tradeVolumeDisplay: r.tradeVolumeDisplay ?? prev.tradeVolumeDisplay,
-        tradeVolumeAt: r.tradeVolumeAt ?? prev.tradeVolumeAt,
-        tradeVolumeStatus: r.tradeVolumeStatus ?? prev.tradeVolumeStatus,
+        // Prefer server values when present (including explicit 0)
+        tradeVolumeEth:
+          r.tradeVolumeEth != null ? r.tradeVolumeEth : prev.tradeVolumeEth,
+        tradeVolumeDisplay:
+          r.tradeVolumeDisplay != null
+            ? r.tradeVolumeDisplay
+            : prev.tradeVolumeDisplay,
+        tradeVolumeAt:
+          r.tradeVolumeAt != null ? r.tradeVolumeAt : prev.tradeVolumeAt,
+        tradeVolumeStatus:
+          r.tradeVolumeStatus != null
+            ? r.tradeVolumeStatus
+            : prev.tradeVolumeStatus,
+        floorPriceEth:
+          r.floorPriceEth != null ? r.floorPriceEth : prev.floorPriceEth,
+        floorPriceDisplay:
+          r.floorPriceDisplay != null
+            ? r.floorPriceDisplay
+            : prev.floorPriceDisplay,
+        floorPriceSymbol:
+          r.floorPriceSymbol != null
+            ? r.floorPriceSymbol
+            : prev.floorPriceSymbol,
+        opensea: r.opensea || prev.opensea,
+        icon: r.icon || prev.icon,
       });
       return true;
     }
@@ -1413,44 +1616,191 @@
     return true;
   }
 
+  /** Below 0.0001 ETH → show 0 (no scientific notation like 3.4e-12). */
+  const ETH_DISPLAY_MIN = 0.0001;
+
   function formatTradeVolumeEthAmount(eth) {
     if (eth == null || !Number.isFinite(eth)) return "0 ETH";
-    if (eth === 0) return "0 ETH";
+    if (eth === 0 || Math.abs(eth) < ETH_DISPLAY_MIN) return "0 ETH";
     const trim = (s) => s.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
     if (eth >= 100) return `${trim(eth.toFixed(2))} ETH`;
     if (eth >= 1) return `${trim(eth.toFixed(4))} ETH`;
-    if (eth >= 0.0001) return `${trim(eth.toFixed(6))} ETH`;
-    return `${eth} ETH`;
+    return `${trim(eth.toFixed(6))} ETH`;
+  }
+
+  /** Sanitize server display strings that may still contain e-notation. */
+  function sanitizeEthDisplayString(raw) {
+    const s = String(raw || "").trim();
+    if (!s) return null;
+    const m = s.match(/^([0-9.eE+-]+)\s*(ETH)?$/i);
+    if (!m) {
+      // Already has unit or other token (e.g. USDG) — if looks like sci-notation number prefix, clamp
+      const m2 = s.match(/^([0-9.eE+-]+)\s+(.+)$/);
+      if (m2 && /e[+-]?\d+/i.test(m2[1])) {
+        const n = Number(m2[1]);
+        if (!Number.isFinite(n) || Math.abs(n) < ETH_DISPLAY_MIN) return `0 ${m2[2]}`;
+      }
+      return s;
+    }
+    const n = Number(m[1]);
+    if (!Number.isFinite(n) || Math.abs(n) < ETH_DISPLAY_MIN) return "0 ETH";
+    if (/e[+-]?\d+/i.test(m[1])) return formatTradeVolumeEthAmount(n);
+    return /eth/i.test(s) ? s : `${s} ETH`;
+  }
+
+  function marketMetricPending(status, eth, display) {
+    const hasMeasured =
+      status === "ok" ||
+      (eth != null && Number.isFinite(Number(eth))) ||
+      (display != null && display !== "");
+    if (hasMeasured) return null;
+    if (status === "no_key" || status === "auth") {
+      return lang === "en" ? "n/a" : "暂无";
+    }
+    if (status === "error" || status === "miss") return "—";
+    return "…";
   }
 
   function formatTradeVolumeCell(r) {
     const label = t("tradeVolume");
     const sep = lang === "en" ? ": " : "：";
+    const pending = marketMetricPending(
+      r?.tradeVolumeStatus,
+      r?.tradeVolumeEth,
+      r?.tradeVolumeDisplay
+    );
+    if (pending != null) return `${label}${sep}${pending}`;
+
     const raw = r?.tradeVolumeDisplay;
     let amount = "0 ETH";
     if (raw === "0") {
       amount = "0 ETH";
     } else if (raw != null && raw !== "") {
-      amount = /eth/i.test(String(raw)) ? String(raw).trim() : `${raw} ETH`;
+      amount = sanitizeEthDisplayString(raw) || "0 ETH";
     } else if (r?.tradeVolumeEth != null && Number.isFinite(Number(r.tradeVolumeEth))) {
       amount = formatTradeVolumeEthAmount(Number(r.tradeVolumeEth));
     }
     return `${label}${sep}${amount}`;
   }
 
+  function formatFloorPriceCell(r) {
+    const label = t("floorPrice");
+    const sep = lang === "en" ? ": " : "：";
+    const pending = marketMetricPending(
+      r?.tradeVolumeStatus,
+      r?.floorPriceEth,
+      r?.floorPriceDisplay
+    );
+    if (pending != null) return `${label}${sep}${pending}`;
+
+    const raw = r?.floorPriceDisplay;
+    if (raw != null && raw !== "") {
+      const cleaned = sanitizeEthDisplayString(raw);
+      return `${label}${sep}${cleaned || String(raw).trim()}`;
+    }
+    if (r?.floorPriceEth != null && Number.isFinite(Number(r.floorPriceEth))) {
+      const eth = Number(r.floorPriceEth);
+      const sym = String(r.floorPriceSymbol || "ETH").trim() || "ETH";
+      if (eth === 0 || (/^eth$/i.test(sym) && Math.abs(eth) < ETH_DISPLAY_MIN)) {
+        return `${label}${sep}0 ${sym}`;
+      }
+      if (/^eth$/i.test(sym)) {
+        return `${label}${sep}${formatTradeVolumeEthAmount(eth)}`;
+      }
+      // Non-ETH floors (USDG etc.): keep readable fixed decimals, never sci-notation
+      const trim = (s) => s.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+      const num =
+        eth >= 1 ? trim(eth.toFixed(4)) : trim(eth.toFixed(4));
+      return `${label}${sep}${num} ${sym}`;
+    }
+    return `${label}${sep}—`;
+  }
+
+  /** Numeric metric for sorting; missing/invalid → null (sorted last). */
+  function outMetricNum(r, key) {
+    const n = Number(r?.[key]);
+    if (!Number.isFinite(n)) return null;
+    // Dust volume/floor counts as 0 for ranking (still above "unknown")
+    if (key === "tradeVolumeEth" || key === "floorPriceEth") {
+      if (Math.abs(n) < ETH_DISPLAY_MIN) return 0;
+    }
+    return n;
+  }
+
   function localMintedOutList() {
-    return [...localMintedOut.values()]
-      .filter((r) => !isBlocked(r.contract) && !isNoiseNft(r))
-      .sort((a, b) => (Number(b.lastTs) || 0) - (Number(a.lastTs) || 0));
+    const list = [...localMintedOut.values()].filter(
+      (r) => !isBlocked(r.contract) && !isNoiseNft(r)
+    );
+    const mode = outSort || "recent";
+    list.sort((a, b) => {
+      if (mode === "volume") {
+        const av = outMetricNum(a, "tradeVolumeEth");
+        const bv = outMetricNum(b, "tradeVolumeEth");
+        if (av == null && bv == null) {
+          return (Number(b.lastTs) || 0) - (Number(a.lastTs) || 0);
+        }
+        if (av == null) return 1;
+        if (bv == null) return -1;
+        if (bv !== av) return bv - av;
+        return (Number(b.lastTs) || 0) - (Number(a.lastTs) || 0);
+      }
+      if (mode === "floor") {
+        const af = outMetricNum(a, "floorPriceEth");
+        const bf = outMetricNum(b, "floorPriceEth");
+        if (af == null && bf == null) {
+          return (Number(b.lastTs) || 0) - (Number(a.lastTs) || 0);
+        }
+        if (af == null) return 1;
+        if (bf == null) return -1;
+        if (bf !== af) return bf - af;
+        return (Number(b.lastTs) || 0) - (Number(a.lastTs) || 0);
+      }
+      // recent
+      return (Number(b.lastTs) || 0) - (Number(a.lastTs) || 0);
+    });
+    return list;
   }
 
   function mintedOutSignature(list) {
-    return list
-      .map(
-        (r) =>
-          `${String(r.contract || "").toLowerCase()}:${r.tradeVolumeDisplay ?? ""}:${r.tradeVolumeAt ?? ""}`
-      )
-      .join("|");
+    return (
+      `${outSort}|` +
+      list
+        .map(
+          (r) =>
+            `${String(r.contract || "").toLowerCase()}:${r.tradeVolumeDisplay ?? ""}:${r.floorPriceDisplay ?? ""}:${r.tradeVolumeStatus ?? ""}:${r.tradeVolumeAt ?? ""}:${r.tradeVolumeEth ?? ""}:${r.floorPriceEth ?? ""}`
+        )
+        .join("|")
+    );
+  }
+
+  function syncOutSortUi() {
+    const root = $("outSort");
+    if (!root) return;
+    root.querySelectorAll("[data-out-sort]").forEach((btn) => {
+      const mode = btn.getAttribute("data-out-sort");
+      btn.classList.toggle("is-active", mode === outSort);
+    });
+  }
+
+  function setOutSort(mode) {
+    if (mode !== "recent" && mode !== "volume" && mode !== "floor") return;
+    if (outSort === mode) return;
+    outSort = mode;
+    persistOutSort();
+    syncOutSortUi();
+    // Force list repaint with new order
+    renderMintedOut(null, { force: true });
+  }
+
+  function bindOutSortUi() {
+    const root = $("outSort");
+    if (!root) return;
+    root.addEventListener("click", (ev) => {
+      const btn = ev.target?.closest?.("[data-out-sort]");
+      if (!btn || !root.contains(btn)) return;
+      setOutSort(btn.getAttribute("data-out-sort"));
+    });
+    syncOutSortUi();
   }
 
   /** Always hide Uniswap LP position NFTs (no UI toggle). */
@@ -1493,6 +1843,24 @@
       /* ignore */
     }
     return "all";
+  }
+
+  function loadOutSort() {
+    try {
+      const v = localStorage.getItem(OUT_SORT_KEY);
+      if (v === "recent" || v === "volume" || v === "floor") return v;
+    } catch {
+      /* ignore */
+    }
+    return "recent";
+  }
+
+  function persistOutSort() {
+    try {
+      localStorage.setItem(OUT_SORT_KEY, outSort);
+    } catch {
+      /* ignore */
+    }
   }
 
   function persistPriceFilter() {
@@ -1865,11 +2233,76 @@
             <span class="price-tag">${escapeHtml(priceText)}</span>
             <span>supply ${escapeHtml(String(supplyLabel))}</span>
             <span>holders ${fmtNum(r.holders)}</span>
+            <span class="floor-price">${escapeHtml(formatFloorPriceCell(r))}</span>
             <span class="trade-volume">${escapeHtml(formatTradeVolumeCell(r))}</span>
           </div>
         </article>`;
       })
       .join("");
+  }
+
+  /**
+   * King of the Hill — center-stage champion by 1h mint count.
+   * Prefer server `king`; fall back to filtered hot[0].
+   */
+  function pickKingRow(data) {
+    const serverKing = data?.king;
+    if (
+      serverKing?.contract &&
+      !isBlocked(serverKing.contract) &&
+      !isNoiseNft(serverKing) &&
+      !isMintedOutRow(serverKing)
+    ) {
+      return serverKing;
+    }
+    const hot = pickHot(data);
+    const filtered = hot.filter(
+      (r) =>
+        r &&
+        !isBlocked(r.contract) &&
+        !isNoiseNft(r) &&
+        !isMintedOutRow(r) &&
+        Number(r.mints1h || r.mints || 0) > 0
+    );
+    return filtered[0] || null;
+  }
+
+  function renderKingOfTheHill(data, { force = false } = {}) {
+    if (!els.kothInner) return;
+    const king = data ? pickKingRow(data) : null;
+    const sig = king
+      ? `${String(king.contract || "").toLowerCase()}:${king.name ?? ""}:${king.icon ?? ""}:${king.mints1h ?? ""}`
+      : "empty";
+    if (!force && sig === kothPaintSig) return;
+    kothPaintSig = sig;
+
+    if (!king) {
+      els.kothInner.innerHTML = `<div class="koth-empty">${escapeHtml(
+        t("kothEmpty")
+      )}</div>`;
+      if (els.koth) els.koth.dataset.hasKing = "0";
+      return;
+    }
+
+    if (els.koth) els.koth.dataset.hasKing = "1";
+    const fullName = king.name || "Unknown";
+    // Name opens OpenSea (collection / contract page), not Blockscout
+    const osHref = openseaUrl(king.contract, king) || king.explorerToken || "#";
+    const m1h = Number(king.mints1h || king.mints || 0);
+
+    // Two rows: title on top; avatar + full name (+ 1h) below — no symbol (saves width).
+    els.kothInner.innerHTML = `
+      <div class="koth-head">
+        <span class="koth-crown" aria-hidden="true">👑</span>
+        <span class="koth-title">${escapeHtml(t("kothTitle"))}</span>
+      </div>
+      <div class="koth-body">
+        <div class="koth-hero">
+          ${avatarHtml(king)}
+          <a class="koth-name" href="${escapeHtml(osHref)}" target="_blank" rel="noopener" title="${escapeHtml(fullName)} · OpenSea">${escapeHtml(fullName)}</a>
+        </div>
+        <span class="koth-mints" title="${escapeHtml(t("kothMints1h"))}">${fmtNum(m1h)}<span class="koth-mints-unit">/1h</span></span>
+      </div>`;
   }
 
   function renderStatus(data) {
@@ -2027,6 +2460,7 @@
   function renderAll(data, { forceMintedOut = false } = {}) {
     // Hot first so pickHot can absorb any residual mint-outs into local archive
     renderHot(data);
+    renderKingOfTheHill(data, { force: forceMintedOut });
     renderFeed(data);
     renderMintedOut(data, { force: forceMintedOut });
     renderStatus(data);
@@ -3236,6 +3670,8 @@
 
   applyThemeUi();
   applyStaticI18n();
+  bindColLayoutUi();
+  bindOutSortUi();
   refresh();
   timer = setInterval(refresh, 4000);
 
