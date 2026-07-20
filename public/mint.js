@@ -100,7 +100,6 @@
       updatesLink: "Updates",
       updatesTitle: "最近更新",
       updatesClose: "关闭",
-      apiDocsLink: "API",
       openseaLink: "OpenSea",
       openseaTitle: "铸造 ROBIN 官方 NFT",
       openseaP1:
@@ -280,7 +279,6 @@
       updatesLink: "Updates",
       updatesTitle: "Recent updates",
       updatesClose: "Close",
-      apiDocsLink: "API",
       openseaLink: "OpenSea",
       openseaTitle: "Mint the ROBIN Official NFT",
       openseaP1:
