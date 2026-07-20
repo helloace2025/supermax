@@ -141,14 +141,48 @@ const MAX_EVENTS = Math.max(
 const __radarDir = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.DATA_DIR || path.join(__radarDir, "..", "data");
 const MINTED_OUT_FILE = path.join(DATA_DIR, "minted-out.json");
+/** 24h mint event cache (survives redeploy only if DATA_DIR is on a Railway Volume) */
+const EVENTS_FILE = path.join(DATA_DIR, "mint-events.json");
+const TX_PRICE_FILE = path.join(DATA_DIR, "tx-prices.json");
 /** Cap sticky archive so overnight growth cannot OOM Railway hobby RAM */
 const MINTED_OUT_MAX = 200;
+/** Disk: keep up to 24h of mint rows (newest first cap) */
+const DISK_EVENT_RETENTION_MS = Math.max(
+  60 * 60_000,
+  Number(process.env.DISK_EVENT_RETENTION_MS) || 24 * 60 * 60_000
+);
+const DISK_EVENTS_MAX = Math.max(
+  500,
+  Math.min(20_000, Number(process.env.DISK_EVENTS_MAX) || 8_000)
+);
+/** How often to flush cache to disk */
+const PERSIST_INTERVAL_MS = Math.max(
+  30_000,
+  Number(process.env.PERSIST_INTERVAL_MS) || 60_000
+);
 /** @type {Map<string, object>} contract -> archived sold-out row */
 const mintedOutArchive = new Map();
 let mintedOutSaveTimer = null;
+/** @type {ReturnType<typeof setInterval> | null} */
+let persistTimer = null;
+/** In-memory snapshot of last disk load (for merge-save without re-read thrash) */
+/** @type {Map<string, object>} */
+let diskEventMergeCache = new Map();
 
-/** Main mint poll interval — leave headroom under Blockscout rate limits */
-const POLL_MS = 5000;
+/**
+ * Main mint poll interval. Default 10s — hot board stays roughly fresh without
+ * burning Blockscout Free gateway credits (filters ~50 credits/call).
+ * Override: POLL_MS=5000 for snappier / POLL_MS=15000 to save more.
+ */
+const POLL_MS = Math.max(
+  3000,
+  Math.min(60_000, Number(process.env.POLL_MS) || 10_000)
+);
+console.log(
+  `[mint-radar] Blockscout API base=${BLOCKSCOUT_API} poll=${POLL_MS}ms key=${
+    BLOCKSCOUT_API_KEY ? "on" : "off"
+  }`
+);
 const FETCH_TIMEOUT_MS = 12000;
 /** Tx price lookups share Blockscout quota with poll — keep modest under load. */
 const TX_PRICE_CONCURRENCY = Math.max(
@@ -2026,16 +2060,220 @@ function trimEvents() {
     if (old) removeEventKey(old);
   }
   // keep ≥1h so hot table can show 5m / 30m / 1h mint counts
+  // (24h history lives on disk via mint-events.json merge-save)
   const cutoff = Date.now() - 65 * 60 * 1000;
   while (eventOrder.length) {
     const k = eventOrder[0];
     const e = eventMap.get(k);
     if (!e || e.ts >= cutoff) break;
+    // Keep evicted-but-recent rows in merge cache so 24h disk save still sees them
+    if (e.ts >= Date.now() - DISK_EVENT_RETENTION_MS) {
+      diskEventMergeCache.set(e.key, serializeMintEvent(e));
+    }
     eventOrder.shift();
     removeEventKey(k);
   }
   // After event eviction, drop cold collection meta so heap does not grow overnight
   if (metaCache.size > META_CACHE_MAX) trimMetaCache();
+}
+
+/** Plain JSON-safe mint row for disk (no BigInt). */
+function serializeMintEvent(e) {
+  if (!e?.key) return null;
+  return {
+    key: e.key,
+    txHash: e.txHash || null,
+    blockNumber: e.blockNumber ?? null,
+    timestamp: e.timestamp || null,
+    ts: e.ts ?? null,
+    method: e.method || null,
+    tokenId: e.tokenId ?? null,
+    contract: e.contract || null,
+    name: e.name || null,
+    symbol: e.symbol || null,
+    holders: e.holders ?? null,
+    minted: e.minted ?? e.totalSupply ?? null,
+    totalSupply: e.totalSupply ?? e.minted ?? null,
+    minter: e.minter || null,
+    minterShort: e.minterShort || null,
+    icon: e.icon || null,
+    txValueWei: e.txValueWei != null ? String(e.txValueWei) : null,
+    txValueEth: e.txValueEth ?? null,
+    unitPriceWei: e.unitPriceWei != null ? String(e.unitPriceWei) : null,
+    unitPriceEth: e.unitPriceEth ?? null,
+    priceKnown: Boolean(e.priceKnown || e.unitPriceWei != null),
+    explorerTx: e.explorerTx || null,
+    explorerToken: e.explorerToken || null,
+    explorerMinter: e.explorerMinter || null,
+    opensea: e.opensea || null,
+    openseaItem: e.openseaItem || null,
+  };
+}
+
+function ensureDataDir() {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  } catch (e) {
+    console.warn("[mint-radar] mkdir DATA_DIR failed:", e?.message || e);
+  }
+}
+
+function loadTxPricesFromDisk() {
+  try {
+    if (!fs.existsSync(TX_PRICE_FILE)) return;
+    const raw = JSON.parse(fs.readFileSync(TX_PRICE_FILE, "utf8"));
+    const items = raw?.items && typeof raw.items === "object" ? raw.items : raw;
+    if (!items || typeof items !== "object") return;
+    let n = 0;
+    for (const [h, meta] of Object.entries(items)) {
+      const hash = String(h || "").toLowerCase();
+      if (!hash || hash.length < 10 || !meta) continue;
+      txPriceCache.set(hash, {
+        valueWei: meta.valueWei != null ? String(meta.valueWei) : null,
+        unitWei: meta.unitWei != null ? String(meta.unitWei) : null,
+        unitEth: meta.unitEth ?? null,
+        txValueEth: meta.txValueEth ?? null,
+        nftMints: meta.nftMints ?? null,
+        status: meta.status || "ok",
+        updatedAt: meta.updatedAt || Date.now(),
+      });
+      n += 1;
+    }
+    if (n) console.log(`[mint-radar] loaded ${n} tx prices from disk`);
+  } catch (e) {
+    console.warn("[mint-radar] load tx-prices failed:", e?.message || e);
+  }
+}
+
+function saveTxPricesToDisk() {
+  try {
+    ensureDataDir();
+    const cutoff = Date.now() - DISK_EVENT_RETENTION_MS;
+    /** @type {Record<string, object>} */
+    const items = {};
+    let n = 0;
+    for (const [h, meta] of txPriceCache.entries()) {
+      if (!meta || meta.status === "error") continue;
+      if (meta.valueWei == null && meta.unitWei == null) continue;
+      if (meta.updatedAt && meta.updatedAt < cutoff) continue;
+      items[h] = {
+        valueWei: meta.valueWei ?? null,
+        unitWei: meta.unitWei ?? null,
+        unitEth: meta.unitEth ?? null,
+        txValueEth: meta.txValueEth ?? null,
+        nftMints: meta.nftMints ?? null,
+        status: meta.status || "ok",
+        updatedAt: meta.updatedAt || Date.now(),
+      };
+      n += 1;
+      if (n >= 4000) break;
+    }
+    fs.writeFileSync(
+      TX_PRICE_FILE,
+      JSON.stringify({ version: 1, updatedAt: Date.now(), items }, null, 0),
+      "utf8"
+    );
+  } catch (e) {
+    console.warn("[mint-radar] save tx-prices failed:", e?.message || e);
+  }
+}
+
+function loadEventsFromDisk() {
+  try {
+    if (!fs.existsSync(EVENTS_FILE)) return;
+    const raw = JSON.parse(fs.readFileSync(EVENTS_FILE, "utf8"));
+    const list = Array.isArray(raw) ? raw : raw?.items;
+    if (!Array.isArray(list) || !list.length) return;
+    const cutoff = Date.now() - DISK_EVENT_RETENTION_MS;
+    // Sort oldest→newest so eventOrder matches live ingest
+    const sorted = list
+      .filter((e) => e?.key && e.ts != null && Number(e.ts) >= cutoff)
+      .sort((a, b) => (Number(a.ts) || 0) - (Number(b.ts) || 0));
+    let added = 0;
+    for (const row of sorted) {
+      const key = String(row.key);
+      diskEventMergeCache.set(key, serializeMintEvent(row));
+      if (eventMap.has(key)) continue;
+      const e = {
+        ...row,
+        key,
+        contract: String(row.contract || "").toLowerCase(),
+        priceKnown: Boolean(row.priceKnown || row.unitPriceWei != null),
+      };
+      eventMap.set(key, e);
+      eventOrder.push(key);
+      indexEventByTx(e);
+      added += 1;
+    }
+    // Fit memory window / caps (keeps newest ~1h for hot board)
+    trimEvents();
+    console.log(
+      `[mint-radar] loaded ${added} mint events from disk (store=${eventMap.size}, diskCache=${diskEventMergeCache.size})`
+    );
+  } catch (e) {
+    console.warn("[mint-radar] load mint-events failed:", e?.message || e);
+  }
+}
+
+function saveEventsToDisk() {
+  try {
+    ensureDataDir();
+    const cutoff = Date.now() - DISK_EVENT_RETENTION_MS;
+    /** @type {Map<string, object>} */
+    const byKey = new Map();
+    // Previous disk snapshot (24h merge)
+    for (const [k, row] of diskEventMergeCache.entries()) {
+      if (row?.ts != null && Number(row.ts) >= cutoff) byKey.set(k, row);
+    }
+    // Live memory wins
+    for (const e of eventMap.values()) {
+      const s = serializeMintEvent(e);
+      if (s && s.ts != null && Number(s.ts) >= cutoff) byKey.set(s.key, s);
+    }
+    const items = [...byKey.values()]
+      .sort((a, b) => (Number(b.ts) || 0) - (Number(a.ts) || 0))
+      .slice(0, DISK_EVENTS_MAX);
+    // Refresh merge cache to trimmed set
+    diskEventMergeCache = new Map(items.map((r) => [r.key, r]));
+    fs.writeFileSync(
+      EVENTS_FILE,
+      JSON.stringify(
+        {
+          version: 1,
+          updatedAt: Date.now(),
+          retentionMs: DISK_EVENT_RETENTION_MS,
+          items,
+        },
+        null,
+        0
+      ),
+      "utf8"
+    );
+  } catch (e) {
+    console.warn("[mint-radar] save mint-events failed:", e?.message || e);
+  }
+}
+
+/** Flush all durable caches (minted-out + 24h events + prices). */
+export function flushRadarPersist() {
+  try {
+    saveMintedOutArchive();
+    saveEventsToDisk();
+    saveTxPricesToDisk();
+    console.log(
+      `[mint-radar] persisted cache → ${DATA_DIR} (events≈${diskEventMergeCache.size} mintedOut=${mintedOutArchive.size})`
+    );
+  } catch (e) {
+    console.warn("[mint-radar] flushRadarPersist failed:", e?.message || e);
+  }
+}
+
+function startPersistLoop() {
+  if (persistTimer) return;
+  persistTimer = setInterval(() => {
+    flushRadarPersist();
+  }, PERSIST_INTERVAL_MS);
+  persistTimer.unref?.();
 }
 
 function ingestItems(items) {
@@ -3091,10 +3329,21 @@ export function startMintRadar() {
   if (pollTimer) return;
   // Init proxy once logs are about to start (env already loaded via load-env.js)
   getProxyAgent();
+  ensureDataDir();
+  // Disk warm-start (24h events + prices + minted-out) before first poll
   loadMintedOutArchive();
   trimMintedOutArchive();
+  loadTxPricesFromDisk();
+  loadEventsFromDisk();
+  startPersistLoop();
   console.log("[mint-radar] starting (Blockscout poll)");
-  console.log(`[mint-radar] DATA_DIR=${DATA_DIR}`);
+  console.log(
+    `[mint-radar] DATA_DIR=${DATA_DIR} diskRetention=${Math.round(
+      DISK_EVENT_RETENTION_MS / 3600000
+    )}h eventsFile≤${DISK_EVENTS_MAX} persistEvery=${Math.round(
+      PERSIST_INTERVAL_MS / 1000
+    )}s`
+  );
   console.log(
     `[mint-radar] memory guards: events≤${MAX_EVENTS} meta≤${META_CACHE_MAX} txPrice≤${TX_PRICE_CACHE_MAX} queues meta/tx/html=${META_QUEUE_MAX}/${TX_PRICE_QUEUE_MAX}/${TWITTER_HTML_QUEUE_MAX} priceWorkers=${TX_PRICE_CONCURRENCY} gap=${TX_PRICE_GAP_MS}ms html=${OPENSEA_HTML_ENABLED ? "on" : "OFF"}≤${Math.round(OPENSEA_HTML_MAX_BYTES / 1024)}KB degrade≥${RSS_DEGRADE_MB}MB`
   );
@@ -3146,4 +3395,9 @@ export function stopMintRadar() {
     clearInterval(tradeVolumeTimer);
     tradeVolumeTimer = null;
   }
+  if (persistTimer) {
+    clearInterval(persistTimer);
+    persistTimer = null;
+  }
+  flushRadarPersist();
 }

@@ -46,6 +46,7 @@ This repo is already wired for Railway:
 | `BLOCKSCOUT_API_KEY` | No | If you use Blockscout PRO |
 | `OPENSEA_CHAIN` | No | Default `robinhood` |
 | `OPENSEA_API_KEY` | **Yes for 交易额** | OpenSea free API key — required for minted-out trade volumes + collection meta. Without it, volumes stay empty. |
+| `DATA_DIR` | **Yes for 缓存** | e.g. `/data` on a Railway Volume — keeps ~24h mint events + minted-out + prices across redeploys. Without Volume, redeploy wipes data. |
 | `HTTPS_PROXY` / `HTTP_PROXY` | No | **Leave unset** on Railway (local Clash only) |
 
 ### Ops notes

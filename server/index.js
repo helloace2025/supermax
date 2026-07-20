@@ -12,6 +12,8 @@ import { fileURLToPath } from "url";
 import {
   getMintSnapshot,
   startMintRadar,
+  stopMintRadar,
+  flushRadarPersist,
   fetchWalletNfts,
   refreshMintedOutTradeVolumes,
   hasOpenSeaApiKey,
@@ -226,3 +228,23 @@ server.on("error", (err) => {
   console.error("[server] listen error:", err);
   process.exit(1);
 });
+
+/** Flush 24h disk cache on deploy/stop so Railway restarts keep warm data. */
+function gracefulShutdown(signal) {
+  console.log(`[server] ${signal} — flushing radar cache…`);
+  try {
+    flushRadarPersist();
+  } catch (e) {
+    console.error("[server] flush on shutdown failed:", e?.message || e);
+  }
+  try {
+    stopMintRadar();
+  } catch {
+    /* ignore */
+  }
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 4000).unref?.();
+}
+
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
