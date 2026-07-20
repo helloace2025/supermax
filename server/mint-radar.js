@@ -155,10 +155,10 @@ const DISK_EVENTS_MAX = Math.max(
   500,
   Math.min(20_000, Number(process.env.DISK_EVENTS_MAX) || 8_000)
 );
-/** How often to flush cache to disk */
+/** How often to flush cache to disk (also flushed after each successful poll) */
 const PERSIST_INTERVAL_MS = Math.max(
-  30_000,
-  Number(process.env.PERSIST_INTERVAL_MS) || 60_000
+  15_000,
+  Number(process.env.PERSIST_INTERVAL_MS) || 30_000
 );
 /** @type {Map<string, object>} contract -> archived sold-out row */
 const mintedOutArchive = new Map();
@@ -168,6 +168,71 @@ let persistTimer = null;
 /** In-memory snapshot of last disk load (for merge-save without re-read thrash) */
 /** @type {Map<string, object>} */
 let diskEventMergeCache = new Map();
+/** Last successful disk flush (ms) — exposed on /api/status */
+let lastPersistAt = null;
+let lastPersistError = null;
+let lastLoadedEvents = 0;
+let lastLoadedMintedOut = 0;
+let lastLoadedPrices = 0;
+
+/**
+ * Railway redeploys wipe the container FS. Only a Volume + DATA_DIR survives.
+ * Heuristic: custom DATA_DIR that is absolute and not under the app tree.
+ */
+function isLikelyDurableDataDir() {
+  const raw = (process.env.DATA_DIR || "").trim();
+  if (!raw) return false;
+  const resolved = path.resolve(raw);
+  const appRoot = path.resolve(path.join(__radarDir, ".."));
+  if (resolved === appRoot || resolved.startsWith(appRoot + path.sep)) {
+    return false;
+  }
+  // Common volume mounts
+  if (
+    resolved === "/data" ||
+    resolved.startsWith("/data/") ||
+    resolved.startsWith("/var/data") ||
+    resolved.startsWith("/mnt/")
+  ) {
+    return true;
+  }
+  return path.isAbsolute(raw);
+}
+
+function getPersistStatus() {
+  let eventsFileBytes = null;
+  let mintedOutFileBytes = null;
+  try {
+    if (fs.existsSync(EVENTS_FILE)) {
+      eventsFileBytes = fs.statSync(EVENTS_FILE).size;
+    }
+    if (fs.existsSync(MINTED_OUT_FILE)) {
+      mintedOutFileBytes = fs.statSync(MINTED_OUT_FILE).size;
+    }
+  } catch {
+    /* ignore */
+  }
+  const durable = isLikelyDurableDataDir();
+  return {
+    dataDir: DATA_DIR,
+    durable,
+    warning: durable
+      ? null
+      : "DATA_DIR is not on a Railway Volume — redeploy will wipe cache. Mount Volume at /data and set DATA_DIR=/data",
+    lastPersistAt: lastPersistAt
+      ? new Date(lastPersistAt).toISOString()
+      : null,
+    lastPersistError,
+    lastLoadedEvents,
+    lastLoadedMintedOut,
+    lastLoadedPrices,
+    diskEventMergeSize: diskEventMergeCache.size,
+    eventsFile: EVENTS_FILE,
+    eventsFileBytes,
+    mintedOutFileBytes,
+    retentionHours: Math.round(DISK_EVENT_RETENTION_MS / 3600000),
+  };
+}
 
 /**
  * Main mint poll interval. Default 10s — hot board stays roughly fresh without
@@ -2139,6 +2204,7 @@ function loadTxPricesFromDisk() {
       });
       n += 1;
     }
+    lastLoadedPrices = n;
     if (n) console.log(`[mint-radar] loaded ${n} tx prices from disk`);
   } catch (e) {
     console.warn("[mint-radar] load tx-prices failed:", e?.message || e);
@@ -2207,6 +2273,7 @@ function loadEventsFromDisk() {
     }
     // Fit memory window / caps (keeps newest ~1h for hot board)
     trimEvents();
+    lastLoadedEvents = added;
     console.log(
       `[mint-radar] loaded ${added} mint events from disk (store=${eventMap.size}, diskCache=${diskEventMergeCache.size})`
     );
@@ -2260,13 +2327,39 @@ export function flushRadarPersist() {
     saveMintedOutArchive();
     saveEventsToDisk();
     saveTxPricesToDisk();
+    lastPersistAt = Date.now();
+    lastPersistError = null;
+    // Marker so ops can see writes succeed on the volume
+    try {
+      fs.writeFileSync(
+        path.join(DATA_DIR, "cache-meta.json"),
+        JSON.stringify(
+          {
+            updatedAt: lastPersistAt,
+            durable: isLikelyDurableDataDir(),
+            dataDir: DATA_DIR,
+            events: diskEventMergeCache.size,
+            mintedOut: mintedOutArchive.size,
+            prices: txPriceCache.size,
+          },
+          null,
+          0
+        ),
+        "utf8"
+      );
+    } catch {
+      /* ignore meta write */
+    }
     console.log(
-      `[mint-radar] persisted cache → ${DATA_DIR} (events≈${diskEventMergeCache.size} mintedOut=${mintedOutArchive.size})`
+      `[mint-radar] persisted cache → ${DATA_DIR} (events≈${diskEventMergeCache.size} mintedOut=${mintedOutArchive.size} durable=${isLikelyDurableDataDir()})`
     );
   } catch (e) {
+    lastPersistError = e?.message || String(e);
     console.warn("[mint-radar] flushRadarPersist failed:", e?.message || e);
   }
 }
+
+export { getPersistStatus };
 
 function startPersistLoop() {
   if (persistTimer) return;
@@ -2405,6 +2498,10 @@ async function pollOnce() {
       harvestMintedOut();
       // After mint ingest, retry any hot-window txs that never got a price
       requeueMissingTxPrices({ force: true });
+      // Flush often — Railway may kill before the interval timer on redeploy
+      if (eventMap.size > 0 || mintedOutArchive.size > 0) {
+        flushRadarPersist();
+      }
     }
   } catch (e) {
     // Never let poll crash the process (Railway marks CRASHED on unhandled rejections)
@@ -2860,6 +2957,7 @@ function loadMintedOutArchive() {
       if (!c || c.length < 10) continue;
       mintedOutArchive.set(c, { ...row, contract: c, mintedOut: true });
     }
+    lastLoadedMintedOut = mintedOutArchive.size;
     console.log(
       `[mint-radar] loaded ${mintedOutArchive.size} minted-out archive from ${MINTED_OUT_FILE}`
     );
@@ -3176,6 +3274,8 @@ export function getMintSnapshot(opts = {}) {
       openSeaApiKey: hasOpenSeaApiKey(),
       mintedOutArchiveSize: mintedOutArchive.size,
       tradeVolumeBusy,
+      /** Disk cache / Railway Volume status */
+      persist: getPersistStatus(),
       /** Structured diagnosis for UI alert banner */
       health: computeHealth(),
     },
@@ -3336,14 +3436,21 @@ export function startMintRadar() {
   loadTxPricesFromDisk();
   loadEventsFromDisk();
   startPersistLoop();
+  // Immediate snapshot so a crash 10s later still has something on disk
+  flushRadarPersist();
   console.log("[mint-radar] starting (Blockscout poll)");
   console.log(
-    `[mint-radar] DATA_DIR=${DATA_DIR} diskRetention=${Math.round(
+    `[mint-radar] DATA_DIR=${DATA_DIR} durable=${isLikelyDurableDataDir()} diskRetention=${Math.round(
       DISK_EVENT_RETENTION_MS / 3600000
     )}h eventsFile≤${DISK_EVENTS_MAX} persistEvery=${Math.round(
       PERSIST_INTERVAL_MS / 1000
-    )}s`
+    )}s loaded events=${lastLoadedEvents} mintedOut=${lastLoadedMintedOut} prices=${lastLoadedPrices}`
   );
+  if (!isLikelyDurableDataDir()) {
+    console.warn(
+      "[mint-radar] ⚠ Cache is EPHEMERAL on Railway without a Volume. Create Volume mount /data and set DATA_DIR=/data — otherwise every redeploy wipes hot board + minted-out."
+    );
+  }
   console.log(
     `[mint-radar] memory guards: events≤${MAX_EVENTS} meta≤${META_CACHE_MAX} txPrice≤${TX_PRICE_CACHE_MAX} queues meta/tx/html=${META_QUEUE_MAX}/${TX_PRICE_QUEUE_MAX}/${TWITTER_HTML_QUEUE_MAX} priceWorkers=${TX_PRICE_CONCURRENCY} gap=${TX_PRICE_GAP_MS}ms html=${OPENSEA_HTML_ENABLED ? "on" : "OFF"}≤${Math.round(OPENSEA_HTML_MAX_BYTES / 1024)}KB degrade≥${RSS_DEGRADE_MB}MB`
   );

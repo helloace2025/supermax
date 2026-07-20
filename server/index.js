@@ -104,6 +104,8 @@ app.get("/api/status", (_req, res) => {
       product: "robin-nft-radar",
       chain: snap.chain,
       status: snap.status,
+      /** Convenience copy for ops: is cache on a Volume? */
+      persist: snap.status?.persist || null,
       memory: {
         rssMb: mb(m.rss),
         heapUsedMb: mb(m.heapUsed),
@@ -206,6 +208,14 @@ app.get("/api/raffles", (_req, res) => {
 
 app.get("/", (_req, res) => {
   res.sendFile(path.join(ROOT, "public", "mint.html"));
+});
+
+app.get("/docs", (_req, res) => {
+  res.redirect(302, "/api.html");
+});
+
+app.get("/api/docs", (_req, res) => {
+  res.redirect(302, "/api.html");
 });
 
 const server = app.listen(PORT, HOST, () => {
