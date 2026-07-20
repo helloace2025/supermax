@@ -150,12 +150,25 @@ let mintedOutSaveTimer = null;
 /** Main mint poll interval — leave headroom under Blockscout rate limits */
 const POLL_MS = 5000;
 const FETCH_TIMEOUT_MS = 12000;
-/** Tx price lookups share the same Blockscout quota as poll — keep low. */
-const TX_PRICE_CONCURRENCY = 1;
-const TX_PRICE_GAP_MS = 350;
+/** Tx price lookups share Blockscout quota with poll — keep modest under load. */
+const TX_PRICE_CONCURRENCY = Math.max(
+  1,
+  Math.min(4, Number(process.env.TX_PRICE_CONCURRENCY) || 2)
+);
+const TX_PRICE_GAP_MS = Math.max(
+  100,
+  Number(process.env.TX_PRICE_GAP_MS) || 220
+);
 const TX_PRICE_CACHE_MAX = 2500;
-const TX_PRICE_QUEUE_MAX = 200;
+const TX_PRICE_QUEUE_MAX = Math.max(
+  200,
+  Math.min(800, Number(process.env.TX_PRICE_QUEUE_MAX) || 400)
+);
 const TX_PRICE_ERROR_COOLDOWN_MS = 30_000;
+/** Re-queue hot-window txs missing unit price (queue drops used to leave them forever). */
+const PRICE_REQUEUE_MAX_PER_PASS = 40;
+let lastPriceRequeueAt = 0;
+const PRICE_REQUEUE_INTERVAL_MS = 8_000;
 /** Global pause after HTTP 429 so poll + price workers back off together */
 const RATE_LIMIT_BACKOFF_MS = 8_000;
 let rateLimitUntil = 0;
@@ -585,6 +598,57 @@ function kickTxPriceWorker() {
       }
     })();
   }
+}
+
+/**
+ * Re-queue recent mint txs that never got a unit price (queue was full / dropped).
+ * Prioritize newest so the hot board fills first.
+ */
+function requeueMissingTxPrices({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && now - lastPriceRequeueAt < PRICE_REQUEUE_INTERVAL_MS) return 0;
+  lastPriceRequeueAt = now;
+  if (Date.now() < rateLimitUntil) return 0;
+
+  const from60 = now - 60 * 60_000;
+  /** @type {string[]} */
+  const missing = [];
+  // Newest-first walk of the store
+  for (let i = eventOrder.length - 1; i >= 0; i -= 1) {
+    const e = eventMap.get(eventOrder[i]);
+    if (!e?.txHash) continue;
+    if (e.ts != null && e.ts < from60) break;
+    if (e.unitPriceWei != null || e.priceKnown) continue;
+    const h = String(e.txHash).toLowerCase();
+    const cached = txPriceCache.get(h);
+    if (cached?.status === "ok" && cached.valueWei != null) {
+      applyTxPriceToEvents(h);
+      continue;
+    }
+    if (cached?.status === "error") {
+      const age = now - (cached.updatedAt || 0);
+      if (age < TX_PRICE_ERROR_COOLDOWN_MS) continue;
+    }
+    if (txPriceQueued.has(h)) continue;
+    missing.push(h);
+    if (missing.length >= PRICE_REQUEUE_MAX_PER_PASS * 3) break;
+  }
+  // Unique preserve order
+  const seen = new Set();
+  let n = 0;
+  for (const h of missing) {
+    if (seen.has(h)) continue;
+    seen.add(h);
+    queueTxPrice(h, null);
+    n += 1;
+    if (n >= PRICE_REQUEUE_MAX_PER_PASS) break;
+  }
+  if (n > 0) {
+    console.log(
+      `[mint-radar] re-queued ${n} txs missing unit price (queue=${txPriceQueue.length})`
+    );
+  }
+  return n;
 }
 
 function eventKey(item) {
@@ -2098,6 +2162,8 @@ async function pollOnce() {
     } else {
       // Archive any newly sold-out collections after a successful poll
       harvestMintedOut();
+      // After mint ingest, retry any hot-window txs that never got a price
+      requeueMissingTxPrices({ force: true });
     }
   } catch (e) {
     // Never let poll crash the process (Railway marks CRASHED on unhandled rejections)
@@ -2760,6 +2826,8 @@ function excludeMintedOutRows(list) {
 
 export function getMintSnapshot(opts = {}) {
   refreshMemoryMode();
+  // Keep hot-board prices catching up even when the queue was previously full
+  requeueMissingTxPrices();
   const windowMin = Math.max(1, Math.min(60, Number(opts.windowMin) || 60));
   const feedLimit = Math.max(10, Math.min(200, Number(opts.feedLimit) || 80));
   const hotLimit = Math.max(5, Math.min(50, Number(opts.hotLimit) || 25));
@@ -3020,7 +3088,7 @@ export function startMintRadar() {
   console.log("[mint-radar] starting (Blockscout poll)");
   console.log(`[mint-radar] DATA_DIR=${DATA_DIR}`);
   console.log(
-    `[mint-radar] memory guards: events≤${MAX_EVENTS} meta≤${META_CACHE_MAX} txPrice≤${TX_PRICE_CACHE_MAX} queues meta/tx/html=${META_QUEUE_MAX}/${TX_PRICE_QUEUE_MAX}/${TWITTER_HTML_QUEUE_MAX} html=${OPENSEA_HTML_ENABLED ? "on" : "OFF"}≤${Math.round(OPENSEA_HTML_MAX_BYTES / 1024)}KB degrade≥${RSS_DEGRADE_MB}MB`
+    `[mint-radar] memory guards: events≤${MAX_EVENTS} meta≤${META_CACHE_MAX} txPrice≤${TX_PRICE_CACHE_MAX} queues meta/tx/html=${META_QUEUE_MAX}/${TX_PRICE_QUEUE_MAX}/${TWITTER_HTML_QUEUE_MAX} priceWorkers=${TX_PRICE_CONCURRENCY} gap=${TX_PRICE_GAP_MS}ms html=${OPENSEA_HTML_ENABLED ? "on" : "OFF"}≤${Math.round(OPENSEA_HTML_MAX_BYTES / 1024)}KB degrade≥${RSS_DEGRADE_MB}MB`
   );
   if (openSeaApiKey()) {
     console.log(
