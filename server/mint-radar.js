@@ -310,7 +310,10 @@ function weiToEthString(wei) {
   return neg ? `-${s}` : s;
 }
 
-/** Single reference price only (no ranges). 0 / dust-rounds-to-0 → Free. */
+/**
+ * Hot-board price label from the latest mint only (not a history average).
+ * 0 / dust → Free; null → still resolving that mint's tx.
+ */
 function formatPriceLabel(wei) {
   if (wei == null) return null;
   const w = typeof wei === "bigint" ? wei : toWei(wei);
@@ -2501,6 +2504,10 @@ function scanAggregateState(now = Date.now()) {
         mints1h: 0,
         minters: new Set(),
         methods: new Map(),
+        /**
+         * Latest mint only — unit wei of that mint's tx (tx.value / mints in tx).
+         * Not an average across history; free↔paid follows the newest mint.
+         */
         priceRefWei: null,
         priceRefTs: null,
         priceUnknown: 0,
@@ -2526,15 +2533,8 @@ function scanAggregateState(now = Date.now()) {
       row.methods.set(e.method, (row.methods.get(e.method) || 0) + 1);
     }
 
-    const unit = toWei(e.unitPriceWei);
-    if (unit == null) {
-      row.priceUnknown += 1;
-    } else if (row.priceRefTs == null || e.ts >= row.priceRefTs) {
-      row.priceRefWei = unit;
-      row.priceRefTs = e.ts;
-    }
-
     if (e.ts >= row.lastTs) {
+      // Newest mint wins (eventOrder is oldest→newest so later events overwrite).
       row.lastTs = e.ts;
       row.lastMintAt = e.timestamp;
       row.lastTx = e.txHash;
@@ -2548,6 +2548,11 @@ function scanAggregateState(now = Date.now()) {
       );
       row.minted = m;
       row.totalSupply = m;
+      // Price always from THIS mint only — clear stale free/paid from older mints.
+      const unit = toWei(e.unitPriceWei);
+      row.priceRefWei = unit; // null → "…"; 0n → Free
+      row.priceRefTs = e.ts;
+      if (unit == null) row.priceUnknown = (row.priceUnknown || 0) + 1;
     } else {
       const m = sanitizeNftMintedCount(
         e.minted ?? e.totalSupply,
@@ -2556,6 +2561,9 @@ function scanAggregateState(now = Date.now()) {
       if (row.minted == null && m != null) {
         row.minted = m;
         row.totalSupply = m;
+      }
+      if (toWei(e.unitPriceWei) == null) {
+        row.priceUnknown = (row.priceUnknown || 0) + 1;
       }
     }
     if (e.ts < row.firstTs) row.firstTs = e.ts;
