@@ -100,6 +100,7 @@
       updatesLink: "Updates",
       updatesTitle: "最近更新",
       updatesClose: "关闭",
+
       openseaLink: "OpenSea",
       openseaTitle: "铸造 ROBIN 官方 NFT",
       openseaP1:
@@ -279,6 +280,7 @@
       updatesLink: "Updates",
       updatesTitle: "Recent updates",
       updatesClose: "Close",
+
       openseaLink: "OpenSea",
       openseaTitle: "Mint the ROBIN Official NFT",
       openseaP1:
@@ -1716,6 +1718,99 @@
     return `${label}${sep}—`;
   }
 
+  /**
+   * ETH/USD for cross-currency floor sort only (display stays original unit).
+   * Fallback keeps USD≈stable floors roughly ranked even if spot fetch fails.
+   */
+  let ethUsdRate = 3200;
+  let ethUsdFetchedAt = 0;
+  const ETH_USD_TTL_MS = 15 * 60 * 1000;
+
+  async function refreshEthUsdRate({ force = false } = {}) {
+    const now = Date.now();
+    if (!force && now - ethUsdFetchedAt < ETH_USD_TTL_MS && ethUsdFetchedAt > 0) {
+      return;
+    }
+    const prev = ethUsdRate;
+    const tryUrls = [
+      "https://api.coinbase.com/v2/prices/ETH-USD/spot",
+      "https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDT",
+    ];
+    for (const url of tryUrls) {
+      try {
+        const res = await fetch(url, { cache: "no-store" });
+        if (!res.ok) continue;
+        const j = await res.json();
+        let n = NaN;
+        if (j?.data?.amount != null) n = Number(j.data.amount);
+        else if (j?.price != null) n = Number(j.price);
+        if (Number.isFinite(n) && n > 100 && n < 1_000_000) {
+          const wasCold = ethUsdFetchedAt === 0;
+          ethUsdRate = n;
+          ethUsdFetchedAt = Date.now();
+          // First fix or meaningful move while on floor sort → re-order
+          if (
+            outSort === "floor" &&
+            localMintedOut.size &&
+            (wasCold || Math.abs(prev - ethUsdRate) / ethUsdRate > 0.005)
+          ) {
+            renderMintedOut(null, { force: true });
+          }
+          return;
+        }
+      } catch {
+        /* try next */
+      }
+    }
+  }
+
+  function floorSymbolOf(r) {
+    const raw = String(r?.floorPriceSymbol || "").trim();
+    if (raw) return raw;
+    const disp = String(r?.floorPriceDisplay || "").trim();
+    const m = disp.match(/\s+([A-Za-z][A-Za-z0-9._-]*)$/);
+    return m ? m[1] : "ETH";
+  }
+
+  function isEthLikeSymbol(sym) {
+    const s = String(sym || "")
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "");
+    return s === "ETH" || s === "WETH" || s === "STETH" || s === "WSTETH";
+  }
+
+  /** USD-pegged / dollar-named quote assets (eUSDG, USDC, …). */
+  function isUsdLikeSymbol(sym) {
+    const s = String(sym || "")
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "");
+    if (!s) return false;
+    if (
+      s === "USD" ||
+      s === "USDC" ||
+      s === "USDT" ||
+      s === "DAI" ||
+      s === "BUSD" ||
+      s === "TUSD" ||
+      s === "USDE" ||
+      s === "FRAX" ||
+      s === "GUSD" ||
+      s === "USDG" ||
+      s === "EUSDG" ||
+      s === "USDCE" ||
+      s === "USDBC" ||
+      s === "USDCENTER" ||
+      s === "RLUSD"
+    ) {
+      return true;
+    }
+    // eUSDG, USDG0, etc.
+    if (s.includes("USD")) return true;
+    return false;
+  }
+
   /** Numeric metric for sorting; missing/invalid → null (sorted last). */
   function outMetricNum(r, key) {
     const n = Number(r?.[key]);
@@ -1727,7 +1822,30 @@
     return n;
   }
 
+  /**
+   * Floor rank key in ≈ETH terms.
+   * OpenSea's floorPriceEth field is the raw amount in floorPriceSymbol
+   * (ETH or eUSDG etc.) — never compare bare numbers across symbols.
+   */
+  function floorSortValueEth(r) {
+    const n = Number(r?.floorPriceEth);
+    if (!Number.isFinite(n) || n < 0) return null;
+    const sym = floorSymbolOf(r);
+    if (isEthLikeSymbol(sym)) {
+      return Math.abs(n) < ETH_DISPLAY_MIN ? 0 : n;
+    }
+    if (isUsdLikeSymbol(sym)) {
+      const rate = ethUsdRate > 0 ? ethUsdRate : 3200;
+      const eth = n / rate;
+      return Math.abs(eth) < ETH_DISPLAY_MIN ? 0 : eth;
+    }
+    // Unknown quote asset: cannot convert fairly — rank below converted floors
+    return null;
+  }
+
   function localMintedOutList() {
+    // Keep ETH/USD fresh when user sorts by floor (non-blocking if already warm)
+    if (outSort === "floor") refreshEthUsdRate();
     const list = [...localMintedOut.values()].filter(
       (r) => !isBlocked(r.contract) && !isNoiseNft(r)
     );
@@ -1745,8 +1863,8 @@
         return (Number(b.lastTs) || 0) - (Number(a.lastTs) || 0);
       }
       if (mode === "floor") {
-        const af = outMetricNum(a, "floorPriceEth");
-        const bf = outMetricNum(b, "floorPriceEth");
+        const af = floorSortValueEth(a);
+        const bf = floorSortValueEth(b);
         if (af == null && bf == null) {
           return (Number(b.lastTs) || 0) - (Number(a.lastTs) || 0);
         }
@@ -3672,6 +3790,9 @@
   applyStaticI18n();
   bindColLayoutUi();
   bindOutSortUi();
+  // Warm ETH/USD so floor sort can compare ETH vs eUSDG/USDC fairly
+  refreshEthUsdRate({ force: true });
+  setInterval(() => refreshEthUsdRate(), ETH_USD_TTL_MS);
   refresh();
   timer = setInterval(refresh, 4000);
 

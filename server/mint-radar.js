@@ -248,29 +248,47 @@ console.log(
     BLOCKSCOUT_API_KEY ? "on" : "off"
   }`
 );
-const FETCH_TIMEOUT_MS = 12000;
+/** Per-request timeout. Proxy + Blockscout tx payloads often need >12s under load. */
+const FETCH_TIMEOUT_MS = Math.max(
+  8000,
+  Number(process.env.FETCH_TIMEOUT_MS) || 25_000
+);
 /** Tx price lookups share Blockscout quota with poll — keep modest under load. */
 const TX_PRICE_CONCURRENCY = Math.max(
   1,
-  Math.min(4, Number(process.env.TX_PRICE_CONCURRENCY) || 2)
+  Math.min(6, Number(process.env.TX_PRICE_CONCURRENCY) || 3)
 );
 const TX_PRICE_GAP_MS = Math.max(
-  100,
-  Number(process.env.TX_PRICE_GAP_MS) || 220
+  50,
+  Number(process.env.TX_PRICE_GAP_MS) || 150
 );
 const TX_PRICE_CACHE_MAX = 2500;
 const TX_PRICE_QUEUE_MAX = Math.max(
   200,
   Math.min(800, Number(process.env.TX_PRICE_QUEUE_MAX) || 400)
 );
+/** Hard failures (HTTP 4xx etc.) — longer cool-down. Transient abort/timeout uses short. */
 const TX_PRICE_ERROR_COOLDOWN_MS = 30_000;
+const TX_PRICE_TRANSIENT_COOLDOWN_MS = 4_000;
 /** Re-queue hot-window txs missing unit price (queue drops used to leave them forever). */
-const PRICE_REQUEUE_MAX_PER_PASS = 40;
+const PRICE_REQUEUE_MAX_PER_PASS = Math.max(
+  20,
+  Math.min(120, Number(process.env.PRICE_REQUEUE_MAX_PER_PASS) || 60)
+);
 let lastPriceRequeueAt = 0;
 const PRICE_REQUEUE_INTERVAL_MS = 8_000;
+/** Independent drain so prices keep resolving even when clients stop polling. */
+const PRICE_WATCHDOG_MS = Math.max(
+  5_000,
+  Number(process.env.PRICE_WATCHDOG_MS) || 12_000
+);
 /** Global pause after HTTP 429 so poll + price workers back off together */
 const RATE_LIMIT_BACKOFF_MS = 8_000;
 let rateLimitUntil = 0;
+/** Last time a tx-price job finished (ok or err) — detect hung workers */
+let lastPriceProgressAt = Date.now();
+/** @type {ReturnType<typeof setInterval> | null} */
+let priceWatchdogTimer = null;
 
 /**
  * OpenSea public HTML pages are multi‑MB and were the main Railway OOM vector.
@@ -571,12 +589,34 @@ function hydrateEventPrice(e, recomputed = null) {
   }
 }
 
+/** Advanced-filters often sends value as "" / whitespace — treat as missing. */
+function normalizeHintValue(v) {
+  if (v == null) return null;
+  if (typeof v === "string" && v.trim() === "") return null;
+  const w = toWei(v);
+  return w != null ? w : null;
+}
+
+function priceErrorCooldownMs(meta) {
+  if (!meta || meta.status !== "error") return TX_PRICE_ERROR_COOLDOWN_MS;
+  if (meta.transient) return TX_PRICE_TRANSIENT_COOLDOWN_MS;
+  return TX_PRICE_ERROR_COOLDOWN_MS;
+}
+
+function isTransientFetchError(err) {
+  const msg = String(err?.message || err || "");
+  return /aborted|timeout|UND_ERR|ECONN|ENOTFOUND|EAI_AGAIN|socket|fetch failed|HTTP 429|HTTP 5\d\d/i.test(
+    msg
+  );
+}
+
 function queueTxPrice(hash, hintValueWei = null) {
   const h = String(hash || "").toLowerCase();
   if (!h || h.length < 10) return;
-  if (hintValueWei != null) {
+  const hint = normalizeHintValue(hintValueWei);
+  if (hint != null) {
     const existing = txPriceCache.get(h) || {};
-    existing.valueWei = String(toWei(hintValueWei) ?? hintValueWei);
+    existing.valueWei = hint.toString();
     if (!existing.status || existing.status === "hint") existing.status = "hint";
     txPriceCache.set(h, existing);
     // Free mint (0) or known value — apply immediately as unit estimate
@@ -591,7 +631,7 @@ function queueTxPrice(hash, hintValueWei = null) {
   // Avoid hammering Blockscout after a hard failure
   if (cached?.status === "error") {
     const age = Date.now() - (cached.updatedAt || 0);
-    if (age < TX_PRICE_ERROR_COOLDOWN_MS) return;
+    if (age < priceErrorCooldownMs(cached)) return;
   }
   if (txPriceQueued.has(h)) return;
   // Hard cap queue so overnight price backlog cannot balloon
@@ -613,7 +653,7 @@ function queueTxPrice(hash, hintValueWei = null) {
 async function resolveTxPrice(hash) {
   const h = String(hash || "").toLowerCase();
   try {
-    // One call is enough: tx payload includes value + token_transfers + decoded_input
+    // One call is enough for most txs: value + token_transfers + decoded_input
     const tx = await fetchJson(`${BLOCKSCOUT}/api/v2/transactions/${h}`);
     const valueWei = toWei(tx?.value ?? 0) ?? 0n;
 
@@ -621,9 +661,13 @@ async function resolveTxPrice(hash) {
     const decodedQty = quantityFromDecodedInput(tx?.decoded_input);
     let stored = countNftMintsInStore(h);
 
-    // Prefer decoded quantity early (SeaDrop mintPublic quantity) — don't wait for all rows
-    // Extra transfers endpoint only when still ambiguous (batch not in payload)
-    if (Math.max(nftMints, decodedQty, stored) < 2) {
+    // Free mint: unit is always 0 — skip slow token-transfers round-trip.
+    // Paid multi-mint: only dig deeper when qty still ambiguous (n might be >1).
+    // advanced-filters value is often empty, so this path is the sole price source.
+    if (
+      valueWei > 0n &&
+      Math.max(nftMints, decodedQty, stored) < 2
+    ) {
       try {
         const tr = await fetchJson(
           `${BLOCKSCOUT}/api/v2/transactions/${h}/token-transfers`
@@ -631,7 +675,7 @@ async function resolveTxPrice(hash) {
         const items = Array.isArray(tr?.items) ? tr.items : [];
         nftMints = Math.max(nftMints, countErc721MintsFromTransfers(items));
       } catch {
-        /* optional */
+        /* optional — store rows / later re-apply will correct unit */
       }
       stored = countNftMintsInStore(h);
     }
@@ -647,25 +691,78 @@ async function resolveTxPrice(hash) {
       transferMints: nftMints,
       storedMints: stored,
       status: "ok",
+      transient: false,
       updatedAt: Date.now(),
     });
     applyTxPriceToEvents(h);
     txPriceResolvedOk += 1;
+    lastPriceProgressAt = Date.now();
   } catch (e) {
     const prev = txPriceCache.get(h) || {};
+    const transient = isTransientFetchError(e);
     txPriceCache.set(h, {
       ...prev,
       status: "error",
+      transient,
       updatedAt: Date.now(),
       error: e.message || String(e),
     });
     txPriceResolvedErr += 1;
-    if (txPriceResolvedErr <= 5 || txPriceResolvedErr % 50 === 0) {
+    lastPriceProgressAt = Date.now();
+    if (txPriceResolvedErr <= 8 || txPriceResolvedErr % 25 === 0) {
       console.warn(
-        `[mint-radar] tx-price fail #${txPriceResolvedErr} ${short(h)}:`,
+        `[mint-radar] tx-price fail #${txPriceResolvedErr} ${short(h)}${
+          transient ? " (transient)" : ""
+        }:`,
         e.message || e
       );
     }
+  }
+}
+
+/**
+ * Hard budget around resolveTxPrice so a hung undici/proxy fetch cannot
+ * permanently pin txPriceInFlight and starve the queue.
+ */
+async function resolveTxPriceBudgeted(hash) {
+  const budgetMs = FETCH_TIMEOUT_MS * 2 + 5_000;
+  let timer = null;
+  try {
+    await Promise.race([
+      resolveTxPrice(hash),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`tx-price budget exceeded ${budgetMs}ms`));
+        }, budgetMs);
+      }),
+    ]);
+  } catch (e) {
+    // Budget timeout: mark transient so requeue retries soon (inner fetch may still finish later)
+    if (/budget exceeded/i.test(String(e?.message || e))) {
+      const h = String(hash || "").toLowerCase();
+      const prev = txPriceCache.get(h) || {};
+      if (prev.status !== "ok") {
+        txPriceCache.set(h, {
+          ...prev,
+          status: "error",
+          transient: true,
+          updatedAt: Date.now(),
+          error: e.message || String(e),
+        });
+        txPriceResolvedErr += 1;
+        lastPriceProgressAt = Date.now();
+        if (txPriceResolvedErr <= 8 || txPriceResolvedErr % 25 === 0) {
+          console.warn(
+            `[mint-radar] tx-price fail #${txPriceResolvedErr} ${short(h)} (transient):`,
+            e.message || e
+          );
+        }
+      }
+      return;
+    }
+    throw e;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -687,19 +784,84 @@ function kickTxPriceWorker() {
     }
     if (cached?.status === "error") {
       const age = Date.now() - (cached.updatedAt || 0);
-      if (age < TX_PRICE_ERROR_COOLDOWN_MS) continue;
+      if (age < priceErrorCooldownMs(cached)) {
+        // Still cooling down — put back later via requeue; do not drop forever
+        continue;
+      }
     }
     txPriceInFlight += 1;
     (async () => {
       try {
-        await resolveTxPrice(hash);
+        await resolveTxPriceBudgeted(hash);
         if (TX_PRICE_GAP_MS > 0) await sleep(TX_PRICE_GAP_MS);
+      } catch (e) {
+        // resolveTxPrice already caches errors; budget path too — keep worker alive
+        if (txPriceResolvedErr <= 8 || txPriceResolvedErr % 25 === 0) {
+          console.warn(
+            `[mint-radar] tx-price worker:`,
+            e?.message || e
+          );
+        }
       } finally {
-        txPriceInFlight -= 1;
+        txPriceInFlight = Math.max(0, txPriceInFlight - 1);
+        lastPriceProgressAt = Date.now();
         if (txPriceQueue.length) kickTxPriceWorker();
       }
     })();
   }
+}
+
+/**
+ * Long-run guard: hung workers / dropped queue / idle clients used to leave
+ * the hot board stuck on "…" until process restart.
+ */
+function priceWatchdogTick() {
+  const now = Date.now();
+  const stallMs = FETCH_TIMEOUT_MS * 2 + 8_000;
+  if (txPriceInFlight > 0 && now - lastPriceProgressAt > stallMs) {
+    console.warn(
+      `[mint-radar] price watchdog: workers stalled inFlight=${txPriceInFlight} idle=${Math.round(
+        (now - lastPriceProgressAt) / 1000
+      )}s — reset & requeue`
+    );
+    txPriceInFlight = 0;
+  }
+  // Clear zombie rate-limit if clock skew / never resumed
+  if (rateLimitUntil > 0 && rateLimitUntil < now - 60_000) {
+    rateLimitUntil = 0;
+  }
+  const n = requeueMissingTxPrices({ force: true });
+  if (txPriceQueue.length > 0 && txPriceInFlight === 0) {
+    kickTxPriceWorker();
+  } else if (n > 0) {
+    kickTxPriceWorker();
+  }
+  // Coverage log when the board is actively minting but prices lag
+  let missing = 0;
+  let total = 0;
+  const from15 = now - 15 * 60_000;
+  for (let i = eventOrder.length - 1; i >= 0; i -= 1) {
+    const e = eventMap.get(eventOrder[i]);
+    if (!e) continue;
+    if (e.ts != null && e.ts < from15) break;
+    total += 1;
+    if (e.unitPriceWei == null && !e.priceKnown) missing += 1;
+    if (total >= 200) break;
+  }
+  if (total >= 8 && missing / total >= 0.35) {
+    console.warn(
+      `[mint-radar] price lag: ${missing}/${total} recent events missing unit price (queue=${txPriceQueue.length} inFlight=${txPriceInFlight})`
+    );
+  }
+}
+
+function startPriceWatchdog() {
+  if (priceWatchdogTimer) return;
+  priceWatchdogTimer = setInterval(priceWatchdogTick, PRICE_WATCHDOG_MS);
+  priceWatchdogTimer.unref?.();
+  console.log(
+    `[mint-radar] price watchdog every ${Math.round(PRICE_WATCHDOG_MS / 1000)}s`
+  );
 }
 
 /**
@@ -729,7 +891,7 @@ function requeueMissingTxPrices({ force = false } = {}) {
     }
     if (cached?.status === "error") {
       const age = now - (cached.updatedAt || 0);
-      if (age < TX_PRICE_ERROR_COOLDOWN_MS) continue;
+      if (age < priceErrorCooldownMs(cached)) continue;
     }
     if (txPriceQueued.has(h)) continue;
     missing.push(h);
@@ -859,6 +1021,11 @@ function emptyMeta(contract) {
     maxSupplyStatus: null,
     /** last time we attempted eth_call for maxSupply */
     maxSupplyCheckedAt: 0,
+    /**
+     * Best-effort # of items minted (NFT count). Prefer Blockscout token.total_supply
+     * on mint events; when indexer leaves it null, fill from OpenSea collection.total_supply.
+     */
+    minted: null,
     /** last OpenSea HTML scrape for Twitter (backoff — avoid 90s re-fetch OOM loop) */
     twitterHtmlTriedAt: 0,
     /** true after a successful HTML parse that still had no twitter handle */
@@ -1160,6 +1327,9 @@ function needsEnrich(meta) {
 
   // maxSupply miss must NOT wait for full 30m social meta TTL — retry often
   if (meta.maxSupplyStatus !== "ok" && supplyAge > 60_000) return true;
+
+  // Blockscout often omits ERC-721 total_supply; retry OpenSea minted fill periodically
+  if (meta.minted == null && age > 2 * 60_000) return true;
 
   // No Twitter yet — only re-queue when HTML is allowed (otherwise REST already tried)
   if (meta.status === "ok" && !meta.twitter && allowOpenSeaHtml()) {
@@ -1815,6 +1985,11 @@ async function enrichFromOpenSea(contract) {
       if (!twitter) {
         scheduleTwitterHtmlFill(c, slug);
       }
+      // OpenSea collection.total_supply = item count (works when Blockscout total_supply is null)
+      const osMinted = sanitizeNftMintedCount(
+        col?.total_supply ?? col?.totalSupply ?? null,
+        null
+      );
       return {
         icon: resolveMediaUrl(col?.image_url) || null,
         twitter,
@@ -1827,6 +2002,7 @@ async function enrichFromOpenSea(contract) {
           col?.opensea_url ||
           `https://opensea.io/collection/${encodeURIComponent(slug)}`,
         source: "opensea",
+        minted: osMinted,
       };
     }
   } catch {
@@ -1840,30 +2016,45 @@ async function enrichFromOpenSea(contract) {
 
 async function enrichFromBlockscout(contract) {
   const c = String(contract).toLowerCase();
-  // token icon (rare for ERC-721)
+  /** @type {{ icon?: string|null, source?: string, minted?: number|null }} */
+  let out = {};
+  // token icon + total_supply (often empty on RH-chain ERC-721, but cheap to try)
   try {
     const tok = await fetchJson(`${BLOCKSCOUT}/api/v2/tokens/${c}`);
     const icon = resolveMediaUrl(tok?.icon_url);
+    const holders =
+      tok?.holders_count != null ? Number(tok.holders_count) : null;
+    const minted = sanitizeNftMintedCount(tok?.total_supply, holders);
     if (icon) {
-      return { icon, source: "blockscout-token" };
+      out = { icon, source: "blockscout-token", minted };
+    } else if (minted != null) {
+      out = { source: "blockscout-token", minted };
     }
   } catch {
     /* ignore */
   }
   // first NFT instance image as collection avatar fallback
-  try {
-    const inst = await fetchJson(`${BLOCKSCOUT}/api/v2/tokens/${c}/instances`);
-    const first = Array.isArray(inst?.items) ? inst.items[0] : null;
-    const icon =
-      resolveMediaUrl(first?.image_url) ||
-      resolveMediaUrl(first?.media_url) ||
-      resolveMediaUrl(first?.metadata?.image) ||
-      null;
-    if (icon) return { icon, source: "blockscout-instance" };
-  } catch {
-    /* ignore */
+  if (!out.icon) {
+    try {
+      const inst = await fetchJson(`${BLOCKSCOUT}/api/v2/tokens/${c}/instances`);
+      const first = Array.isArray(inst?.items) ? inst.items[0] : null;
+      const icon =
+        resolveMediaUrl(first?.image_url) ||
+        resolveMediaUrl(first?.media_url) ||
+        resolveMediaUrl(first?.metadata?.image) ||
+        null;
+      if (icon) {
+        out = {
+          ...out,
+          icon,
+          source: out.source || "blockscout-instance",
+        };
+      }
+    } catch {
+      /* ignore */
+    }
   }
-  return null;
+  return out.icon || out.minted != null ? out : null;
 }
 
 async function enrichMaxSupply(meta, contract) {
@@ -1924,11 +2115,15 @@ async function enrichOne(contract) {
       meta.slug = got.slug || meta.slug || null;
       meta.opensea = got.opensea || meta.opensea;
       meta.source = got.source || meta.source;
-      // Fill avatar from Blockscout if OpenSea HTML/API had Twitter but no image
-      if (!meta.icon) {
+      if (got.minted != null) meta.minted = got.minted;
+      // Fill avatar / minted from Blockscout if OpenSea missed either
+      if (!meta.icon || meta.minted == null) {
         try {
-          const bsIcon = await enrichFromBlockscout(contract);
-          if (bsIcon?.icon) meta.icon = bsIcon.icon;
+          const bsExtra = await enrichFromBlockscout(contract);
+          if (bsExtra?.icon && !meta.icon) meta.icon = bsExtra.icon;
+          if (meta.minted == null && bsExtra?.minted != null) {
+            meta.minted = bsExtra.minted;
+          }
         } catch {
           /* optional */
         }
@@ -1940,12 +2135,13 @@ async function enrichOne(contract) {
       return meta;
     }
 
-    // Blockscout image fallback (no socials)
+    // Blockscout image / supply fallback (no socials)
     const bs = await enrichFromBlockscout(contract);
-    if (bs?.icon || hintIcon) {
-      meta.icon = bs?.icon || hintIcon;
+    if (bs?.icon || hintIcon || bs?.minted != null) {
+      meta.icon = bs?.icon || hintIcon || null;
+      if (bs?.minted != null) meta.minted = bs.minted;
       meta.source = bs?.source || "stream";
-      meta.status = "ok";
+      meta.status = meta.icon || meta.minted != null ? "ok" : "miss";
       await enrichMaxSupply(meta, contract);
       meta.updatedAt = Date.now();
       return meta;
@@ -1994,7 +2190,11 @@ function attachMetaFields(row) {
       : row.maxSupply != null
         ? row.maxSupply
         : null;
-  const minted = row.minted ?? row.totalSupply ?? null;
+  // Stream/Blockscout first; OpenSea collection.total_supply fills indexer gaps
+  const minted = sanitizeNftMintedCount(
+    row.minted ?? row.totalSupply ?? m.minted ?? null,
+    row.holders
+  );
   const mintedOut =
     maxSupply != null &&
     minted != null &&
@@ -2015,6 +2215,8 @@ function attachMetaFields(row) {
     metaStatus: m.status || "pending",
     maxSupply,
     maxSupplyStatus: m.maxSupplyStatus || null,
+    minted,
+    totalSupply: minted,
     mintedOut: !!mintedOut,
   };
 }
@@ -2386,8 +2588,8 @@ function ingestItems(items) {
       latestBlock =
         latestBlock == null ? m.blockNumber : Math.max(latestBlock, m.blockNumber);
     }
-    // Prefer tx-level value (filter often has value=null)
-    queueTxPrice(m.txHash, raw.value != null ? raw.value : null);
+    // Prefer tx-level value (filter often has value=null/"" — normalizeHintValue)
+    queueTxPrice(m.txHash, raw.value);
   }
   // Re-apply unit price after batch counts are known
   for (const h of touchedTx) applyTxPriceToEvents(h);
@@ -3435,10 +3637,26 @@ export function startMintRadar() {
   trimMintedOutArchive();
   loadTxPricesFromDisk();
   loadEventsFromDisk();
+  // Stamp disk price cache onto reloaded events (load alone leaves priceKnown=false)
+  let stamped = 0;
+  for (const h of txPriceCache.keys()) {
+    if (applyTxPriceToEvents(h)) stamped += 1;
+  }
+  if (stamped) {
+    console.log(
+      `[mint-radar] applied disk prices to ${stamped} txs after reload`
+    );
+  }
   startPersistLoop();
   // Immediate snapshot so a crash 10s later still has something on disk
   flushRadarPersist();
   console.log("[mint-radar] starting (Blockscout poll)");
+  // Catch up any hot-window txs that never resolved (queue was dropped / timeout)
+  setTimeout(() => {
+    requeueMissingTxPrices({ force: true });
+    kickTxPriceWorker();
+  }, 1500);
+  startPriceWatchdog();
   console.log(
     `[mint-radar] DATA_DIR=${DATA_DIR} durable=${isLikelyDurableDataDir()} diskRetention=${Math.round(
       DISK_EVENT_RETENTION_MS / 3600000
@@ -3505,6 +3723,10 @@ export function stopMintRadar() {
   if (persistTimer) {
     clearInterval(persistTimer);
     persistTimer = null;
+  }
+  if (priceWatchdogTimer) {
+    clearInterval(priceWatchdogTimer);
+    priceWatchdogTimer = null;
   }
   flushRadarPersist();
 }

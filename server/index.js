@@ -210,14 +210,6 @@ app.get("/", (_req, res) => {
   res.sendFile(path.join(ROOT, "public", "mint.html"));
 });
 
-app.get("/docs", (_req, res) => {
-  res.redirect(302, "/api.html");
-});
-
-app.get("/api/docs", (_req, res) => {
-  res.redirect(302, "/api.html");
-});
-
 const server = app.listen(PORT, HOST, () => {
   console.log(`\n  ROBIN NFT Radar`);
   console.log(`  listening ${HOST}:${PORT}`);
