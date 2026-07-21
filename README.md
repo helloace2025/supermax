@@ -6,6 +6,8 @@ Real-time NFT mint leaderboard for **Robinhood Chain** (chainId `4663`).
 - Live mint feed · **Minted Out** panel · price filter · favorites · risk siren
 - OpenSea / Blockscout / Google Lens · ZH / EN · light / dark
 
+**Product guide (what each section does):** [docs/PRODUCT-GUIDE.md](docs/PRODUCT-GUIDE.md)
+
 ## Local
 
 ```bash
