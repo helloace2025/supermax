@@ -502,8 +502,10 @@ html[data-theme="light"] .koth-name:hover {
   display: block;
   object-fit: cover;
   flex-shrink: 0;
-  box-shadow: 0 0 30px rgba(94, 234, 212, 0.35);
-  background: #07090f;
+  /* Match neon lime mark (#d4ff00-ish) */
+  box-shadow: 0 0 28px rgba(200, 255, 0, 0.42);
+  background: #c8ff00;
+  border: 1px solid rgba(0, 0, 0, 0.12);
 }
 
 h1 {
