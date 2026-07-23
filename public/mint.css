@@ -89,6 +89,25 @@ html[data-theme="light"] {
   color-scheme: light;
 }
 
+/*
+ * Theme switch: freeze transitions/animations + drop expensive filters for 1 paint.
+ * Without this, every trench card animates background/border as CSS vars flip → jank.
+ */
+html.theme-switching,
+html.theme-switching * {
+  transition: none !important;
+  animation-play-state: paused !important;
+}
+
+html.theme-switching .panel,
+html.theme-switching .blocked-panel,
+html.theme-switching .os-modal-backdrop,
+html.theme-switching .bg-glow {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  filter: none !important;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -125,6 +144,7 @@ body {
 /* Hide scrollbar chrome everywhere we allow overflow scroll (keep wheel/trackpad) */
 .hide-scrollbar,
 .table-wrap,
+.trench-list,
 .feed,
 .blocked-panel {
   scrollbar-width: none !important; /* Firefox */
@@ -133,6 +153,7 @@ body {
 
 .hide-scrollbar::-webkit-scrollbar,
 .table-wrap::-webkit-scrollbar,
+.trench-list::-webkit-scrollbar,
 .feed::-webkit-scrollbar,
 .blocked-panel::-webkit-scrollbar,
 html::-webkit-scrollbar,
@@ -1988,39 +2009,26 @@ html[data-theme="light"] .data-health-banner {
   background: var(--btn-hover);
 }
 
-.layout {
+/* —— Trench layout: 3 equal columns (热门榜 | 实时榜 | 已铸造榜) —— */
+.layout,
+.trench-layout {
   display: grid;
-  grid-template-columns: 1.45fr minmax(260px, 1fr);
-  grid-template-rows: minmax(0, 1fr); /* force one full-height row */
-  gap: 14px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: minmax(0, 1fr);
+  gap: 10px;
   flex: 1 1 auto;
   min-height: 0;
   width: 100%;
   align-items: stretch;
-  transition: grid-template-columns 0.2s ease;
-}
-
-/* Both side panels open — default */
-.layout[data-feed-open="1"][data-out-open="1"] {
-  grid-template-columns: 1.45fr minmax(260px, 1fr);
-}
-
-/* Only one side panel open — give hot more room */
-.layout[data-feed-open="1"][data-out-open="0"],
-.layout[data-feed-open="0"][data-out-open="1"] {
-  grid-template-columns: 1.65fr minmax(240px, 0.85fr);
-}
-
-/* Both collapsed — hot full width + thin restore rails */
-.layout[data-feed-open="0"][data-out-open="0"] {
-  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 18px;
-  backdrop-filter: blur(12px);
+  border-radius: 12px;
+  /* lighter blur — full 12px × 3 columns is costly on every theme/layout repaint */
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   box-shadow: var(--shadow);
   overflow: hidden;
   display: flex;
@@ -2031,77 +2039,688 @@ html[data-theme="light"] .data-health-banner {
   align-self: stretch;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .panel {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+.trench-col,
 .hot-panel,
 .feed-panel,
 .out-panel {
   min-height: 0;
   height: 100%;
   max-height: 100%;
-}
-
-/* Right column: live feed (top) + minted-out (bottom), same scroll as feed */
-.right-col {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  min-height: 0;
-  height: 100%;
-  max-height: 100%;
   min-width: 0;
 }
 
-.right-col > .panel {
-  flex: 1 1 0;
-  min-height: 0;
-  height: auto;
-  max-height: none;
-}
-
-/* When only one panel open, it takes the full right column */
-.layout[data-feed-open="1"][data-out-open="0"] .feed-panel,
-.layout[data-feed-open="0"][data-out-open="1"] .out-panel {
-  flex: 1 1 auto;
-}
-
-.layout[data-feed-open="0"][data-out-open="0"] .right-col {
-  flex-direction: column;
-  gap: 8px;
-  width: auto;
-  min-width: 0;
-  justify-content: flex-start;
-}
-
-/* Collapsed panel: hide content, keep out of flex growth */
-.panel.is-collapsed {
-  display: none !important;
-}
-
-.panel-head {
+.panel-head,
+.trench-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 10px;
-  padding: 14px 12px 10px 16px;
+  gap: 8px;
+  padding: 10px 12px 9px;
   border-bottom: 1px solid var(--line);
   flex: 0 0 auto;
+  background: color-mix(in srgb, var(--surface-deep) 70%, transparent);
 }
 
 .panel-head-main {
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 8px 12px;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
   flex: 1 1 auto;
 }
 
 .panel-head h2 {
   margin: 0;
-  font-size: 1.05rem;
+  font-size: 0.92rem;
   font-family: var(--ui);
-  font-weight: 700;
-  line-height: 1.35;
+  font-weight: 750;
+  line-height: 1.25;
   letter-spacing: 0;
+  white-space: nowrap;
+}
+
+/* Column accent dots (GMGN-style) */
+.trench-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 18%, transparent);
+}
+
+.trench-dot-hot {
+  color: #fb7185;
+  background: #fb7185;
+}
+
+.trench-dot-live {
+  color: #5eead4;
+  background: #5eead4;
+}
+
+.trench-dot-out {
+  color: #a78bfa;
+  background: #a78bfa;
+}
+
+html[data-theme="light"] .trench-dot-hot {
+  color: #e11d48;
+  background: #e11d48;
+}
+html[data-theme="light"] .trench-dot-live {
+  color: #0d9488;
+  background: #0d9488;
+}
+html[data-theme="light"] .trench-dot-out {
+  color: #7c3aed;
+  background: #7c3aed;
+}
+
+.trench-head-tools {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Hot panel: filters fill the header middle/right (marked red box) */
+.hot-panel .trench-head {
+  gap: 10px;
+}
+
+.hot-panel .trench-head-tools.hot-filters {
+  flex: 1 1 auto;
+  min-width: 0;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+}
+
+.hot-filter-group {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  padding: 2px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--icon-bg) 80%, transparent);
+}
+
+.hot-filter-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--sep);
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.hot-filter-btn {
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--ui);
+  font-size: 0.68rem;
+  font-weight: 650;
+  padding: 4px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+  line-height: 1.2;
+  transition:
+    color 0.12s,
+    background 0.12s,
+    box-shadow 0.12s;
+}
+
+.hot-filter-btn:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--icon-hover) 70%, transparent);
+}
+
+.hot-filter-btn.is-active,
+.hot-filter-btn.active {
+  color: var(--text);
+  background: color-mix(in srgb, #5eead4 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #5eead4 45%, var(--line));
+}
+
+html[data-theme="light"] .hot-filter-btn.is-active,
+html[data-theme="light"] .hot-filter-btn.active {
+  background: color-mix(in srgb, #0d9488 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #0d9488 38%, var(--line));
+}
+
+@media (max-width: 1100px) {
+  .hot-panel .trench-head {
+    flex-wrap: wrap;
+  }
+  .hot-panel .trench-head-tools.hot-filters {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 520px) {
+  .hot-filter-btn {
+    padding: 3px 7px;
+    font-size: 0.64rem;
+  }
+  .hot-filter-sep {
+    display: none;
+  }
+}
+
+/* Scrollable trench lists */
+.trench-list {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 6px 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-sizing: border-box;
+  background: color-mix(in srgb, var(--feed-bg) 55%, transparent);
+}
+
+/* Even vertical rhythm when every card is the same height */
+.trench-list > .trench-item {
+  flex: 0 0 var(--trench-card-h);
+}
+
+/*
+ * Unified card chrome across 热门 / 实时 / 已铸造 —
+ * same outer height so the three columns feel like one system.
+ */
+:root,
+html[data-theme="dark"],
+html[data-theme="light"] {
+  --trench-card-h: 78px;
+  --trench-card-pad-y: 8px;
+  --trench-card-pad-x: 10px;
+  --trench-card-gap: 6px;
+}
+
+/* —— Card row (shared by hot / live / out) —— */
+.trench-item {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  box-sizing: border-box;
+  height: var(--trench-card-h);
+  min-height: var(--trench-card-h);
+  max-height: var(--trench-card-h);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: var(--trench-card-pad-y) var(--trench-card-pad-x);
+  background: var(--surface-soft);
+  overflow: hidden;
+  /* Hover only — do NOT transition background/border (theme switch would jank all rows) */
+  transition: box-shadow 0.12s ease, opacity 0.2s ease;
+}
+
+/* Hot: rank | body (two rows stacked inside fixed height) */
+.trench-item.hot-item {
+  flex-direction: row;
+  align-items: stretch;
+}
+
+.trench-item.hot-item .trench-rank {
+  padding-top: 2px;
+  align-self: flex-start;
+}
+
+.trench-item.hot-item .trench-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: var(--trench-card-gap);
+}
+
+.trench-item.hot-item .trench-top {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+.trench-item.hot-item .trench-foot {
+  flex: 0 0 auto;
+  min-height: 20px;
+  max-height: 22px;
+  overflow: hidden;
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
+/* Soft waterfall enter (new hot row / new live mint) */
+.trench-item.stream-enter {
+  animation: stream-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.trench-item.stream-enter-top {
+  animation-name: stream-in-top;
+}
+
+.trench-item.stream-leave {
+  animation: stream-out 0.2s ease forwards;
+  pointer-events: none;
+}
+
+@keyframes stream-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes stream-in-top {
+  from {
+    opacity: 0;
+    transform: translateY(-12px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes stream-out {
+  to {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trench-item.stream-enter,
+  .trench-item.stream-enter-top,
+  .trench-item.stream-leave {
+    animation: none;
+  }
+  .trench-item {
+    will-change: auto;
+  }
+}
+
+.trench-item:hover {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+  background: color-mix(in srgb, var(--row-hover) 80%, var(--surface-soft));
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+}
+
+.trench-rank {
+  flex: 0 0 1.35rem;
+  width: 1.35rem;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--muted);
+  line-height: 1.2;
+  padding-top: 2px;
+  text-align: center;
+  user-select: none;
+}
+
+.trench-rank.is-top {
+  color: var(--hot);
+  font-weight: 800;
+}
+
+.trench-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.trench-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.trench-id,
+.feed-title.trench-id {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.trench-name-block {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.trench-name-block .name-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.trench-name-block .name,
+.trench-item .name {
+  font-weight: 700;
+  font-family: var(--ui);
+  font-size: 0.84rem;
+  line-height: 1.25;
+  color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.trench-name-block .name:hover {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.trench-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  min-width: 0;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  line-height: 1.3;
+}
+
+.trench-dot-sep {
+  opacity: 0.45;
+  user-select: none;
+}
+
+.trench-sym {
+  max-width: 7rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trench-price {
+  color: var(--text-soft);
+  font-weight: 600;
+}
+
+/*
+ * Hot card metric: ONE number for the active rank window (5m / 30m / 1h).
+ * Header chips choose the window — no need to stack three counts per row.
+ */
+.trench-metric {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  flex-shrink: 0;
+  gap: 1px;
+  min-width: 2.6rem;
+  padding-left: 6px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.trench-metric-num {
+  font-family: var(--mono);
+  font-weight: 800;
+  font-size: 1.05rem;
+  color: #fbbf24;
+  letter-spacing: -0.02em;
+}
+
+.trench-metric-unit {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
+}
+
+html[data-theme="light"] .trench-metric-num {
+  color: #b45309;
+}
+
+/* Legacy multi-stat stack (unused on hot list; keep harmless) */
+.trench-stats {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.trench-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-family: var(--mono);
+  line-height: 1.2;
+  color: var(--muted);
+}
+
+.trench-stat b {
+  font-weight: 750;
+  font-size: 0.78rem;
+  color: var(--text);
+}
+
+.trench-stat span {
+  font-size: 0.62rem;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+.trench-stat.is-primary b {
+  color: #fbbf24;
+  font-size: 0.88rem;
+  font-weight: 800;
+}
+
+html[data-theme="light"] .trench-stat.is-primary b {
+  color: #b45309;
+}
+
+.trench-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 8px;
+  min-width: 0;
+}
+
+.trench-progress {
+  flex: 1 1 72px;
+  min-width: 56px;
+  max-width: 110px;
+}
+
+.trench-progress .mint-progress,
+.trench-progress .bar {
+  width: 100%;
+  margin: 0;
+}
+
+.trench-meta-chip {
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  color: var(--muted);
+  white-space: nowrap;
+  line-height: 1.2;
+}
+
+/* Live feed: mint age sits right after the price chip */
+.trench-item.feed-item .trench-mint-time {
+  margin-left: 0;
+  color: var(--text-soft);
+  font-weight: 600;
+}
+
+.trench-item.feed-item .price-tag + .trench-mint-time {
+  margin-left: 2px;
+}
+
+a.trench-meta-chip {
+  color: color-mix(in srgb, var(--accent) 85%, var(--muted));
+  text-decoration: none;
+}
+
+a.trench-meta-chip:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.trench-links {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+}
+
+.trench-links .icon-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+}
+
+.trench-links .icon-btn svg {
+  width: 11px;
+  height: 11px;
+}
+
+.trench-links .explorer-link {
+  font-size: 0.64rem;
+}
+
+/* Compact avatars inside trench cards */
+.trench-item .avatar-wrap {
+  width: 36px;
+  height: 36px;
+}
+
+.trench-item .avatar,
+.trench-item .avatar.ph {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  font-size: 0.85rem;
+}
+
+.trench-item .block-btn {
+  width: 16px;
+  height: 16px;
+  right: -2px;
+  bottom: -2px;
+}
+
+.trench-item .block-btn svg {
+  width: 9px;
+  height: 9px;
+}
+
+.trench-item .img-search {
+  border-radius: 9px;
+}
+
+.trench-item .img-search svg {
+  width: 14px;
+  height: 14px;
+}
+
+.trench-item .risk-badge {
+  width: 13px;
+  height: 13px;
+}
+
+.trench-item .risk-badge-icon {
+  width: 12px;
+  height: 12px;
+}
+
+.trench-item .star-btn {
+  width: 14px;
+  height: 14px;
+}
+
+.trench-item .star-btn svg,
+.trench-item .star-btn .star-icon {
+  width: 12px;
+  height: 12px;
+}
+
+.trench-item.is-out {
+  border-color: color-mix(in srgb, var(--hot) 22%, var(--line));
+}
+
+.trench-item .time {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  flex-shrink: 0;
+  white-space: nowrap;
+  padding-top: 2px;
+}
+
+.trench-item .pill,
+.trench-item .pill-out {
+  padding: 1px 6px;
+  font-size: 0.62rem;
+  border-radius: 999px;
+  font-weight: 700;
+}
+
+.trench-item .pill-out {
+  color: #fb7185;
+  letter-spacing: 0.03em;
+}
+
+html[data-theme="light"] .trench-item .pill-out {
+  color: #e11d48;
+}
+
+.trench-item .floor-price {
+  color: color-mix(in srgb, #fbbf24 75%, var(--text));
+  font-weight: 600;
+}
+
+.trench-item .trade-volume {
+  color: var(--text);
+  font-weight: 600;
+}
+
+html[data-theme="light"] .trench-item .floor-price {
+  color: #b45309;
 }
 
 /* Collapse toggle (chevron) */
@@ -2211,7 +2830,7 @@ html[data-theme="light"] .data-health-banner {
   font-family: var(--mono);
 }
 
-/* Minted-out sort — sits in panel-head (right of title, left of collapse) */
+/* Minted-out sort — right side of trench column header */
 .out-panel .panel-head {
   gap: 8px;
 }
@@ -2220,10 +2839,10 @@ html[data-theme="light"] .data-health-banner {
   display: inline-flex;
   flex-wrap: nowrap;
   align-items: center;
-  gap: 4px;
-  flex: 0 1 auto;
+  gap: 3px;
+  flex: 0 0 auto;
   min-width: 0;
-  margin-left: auto;
+  margin-left: 0;
 }
 
 .out-sort-btn {
@@ -2949,7 +3568,7 @@ html[data-theme="light"] .img-search:hover {
   display: block;
 }
 
-/* Bare outline star — no square frame; theme ink via --text */
+/* Bare outline heart — no square frame; theme ink via --text */
 .star-btn {
   flex: 0 0 auto;
   width: 16px;
@@ -2969,28 +3588,31 @@ html[data-theme="light"] .img-search:hover {
 }
 
 .star-btn svg,
-.star-btn .star-icon {
+.star-btn .star-icon,
+.star-btn .heart-icon {
   width: 14px;
   height: 14px;
   display: block;
 }
 
-.star-btn .star-icon path {
+.star-btn .star-icon path,
+.star-btn .heart-icon path {
   fill: none;
   stroke: currentColor;
   stroke-width: 1.65;
 }
 
-/* Favorited: solid star, no box */
+/* Favorited: solid heart, rose red */
 .star-btn.is-on {
   opacity: 1;
-  color: #f5c542;
+  color: #fb7185;
   background: transparent;
   border: 0;
   box-shadow: none;
 }
 
-.star-btn.is-on .star-icon path {
+.star-btn.is-on .star-icon path,
+.star-btn.is-on .heart-icon path {
   fill: currentColor;
   stroke: currentColor;
 }
@@ -3008,17 +3630,17 @@ html[data-theme="light"] .img-search:hover {
 }
 
 .star-btn.is-on:hover {
-  color: #ffd666;
+  color: #fda4af;
   background: transparent;
   filter: none;
 }
 
 html[data-theme="light"] .star-btn.is-on {
-  color: #d97706;
+  color: #e11d48;
 }
 
 html[data-theme="light"] .star-btn.is-on:hover {
-  color: #b45309;
+  color: #be123c;
 }
 
 .avatar-wrap:hover .block-btn,
@@ -3426,39 +4048,22 @@ html[data-theme="light"] .mint-out-label {
   padding: 36px 12px !important;
 }
 
-.feed {
-  /* fills all remaining height inside the right card (below title) */
+/* Legacy .feed class still used as alias on trench lists */
+.feed.trench-list,
+.trench-list.feed {
   flex: 1 1 0;
   min-height: 0;
-  height: auto;
   max-height: none !important;
-  overflow-x: hidden;
-  overflow-y: auto;
-  padding: 8px 10px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  box-sizing: border-box;
-}
-
-.feed-panel .feed,
-.out-panel .feed {
-  flex: 1 1 0;
-  min-height: 0;
-}
-
-.out-panel .feed-item.is-out {
-  border-color: color-mix(in srgb, var(--hot) 28%, var(--line));
 }
 
 .out-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 12px;
+  gap: 5px 8px;
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 0.74rem;
-  margin-top: 4px;
+  font-size: 0.66rem;
+  margin-top: 0;
 }
 
 .out-meta .pill-out {
@@ -3486,151 +4091,148 @@ html[data-theme="light"] .out-meta .floor-price {
   color: #b45309;
 }
 
-.feed-item {
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 10px 12px;
-  background: var(--feed-bg);
-  animation: fadeIn 0.35s ease;
+/*
+ * Live + minted-out: same fixed outer height as hot cards.
+ * Column layout: header row (logo+name) + foot row (meta chips).
+ */
+.feed-item.trench-item {
+  flex-direction: column;
+  justify-content: space-between;
+  gap: var(--trench-card-gap);
+}
+
+.trench-item.feed-item .trench-top,
+.trench-item.feed-item .feed-top {
+  flex: 0 1 auto;
+  min-height: 0;
+  width: 100%;
+  margin-bottom: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* Social icons dock to the top-right (same band as logo+name) */
+.trench-item .trench-links-end {
+  flex: 0 0 auto;
+  margin-left: 0;
+  align-self: flex-start;
+  padding-top: 2px;
+}
+
+.trench-item .trench-sub-spacer {
+  visibility: hidden;
+  height: 0.9em;
+  line-height: 0.9em;
+  overflow: hidden;
+}
+
+.trench-item.feed-item .trench-foot,
+.trench-item.feed-item .feed-row,
+.trench-item.feed-item .out-meta {
+  flex: 0 0 auto;
+  min-height: 20px;
+  max-height: 22px;
+  overflow: hidden;
+  flex-wrap: nowrap;
+  align-items: center;
+  margin-top: 0;
+  width: 100%;
 }
 
 /*
- * Right column (live feed + minted-out): same dense row size
- * so both panels feel like one density system.
+ * Live feed: logo top edge lines up with the NFT name top edge.
+ * (Do not vertical-center the name in a tall band — that drops the text below the logo.)
  */
-.right-col .feed {
-  gap: 5px;
-  padding: 6px 8px 10px;
+.trench-item.feed-item .trench-id,
+.trench-item.feed-item .feed-title.trench-id,
+.trench-item.feed-item .feed-title {
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
 }
 
-.right-col .feed-item {
-  padding: 6px 8px;
+.trench-item.feed-item .avatar-wrap {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  /* Nudge logo down so its top matches the name glyph cap-height / first line */
+  margin-top: 1px;
+}
+
+.trench-item.feed-item .avatar,
+.trench-item.feed-item .avatar.ph {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  font-size: 0.85rem;
+}
+
+.trench-item.feed-item .img-search {
   border-radius: 9px;
 }
 
-.right-col .feed-top {
-  gap: 6px;
-  margin-bottom: 2px;
-  align-items: center;
-}
-
-.right-col .feed-title {
-  gap: 7px;
-}
-
-.right-col .feed-title .avatar-wrap {
-  width: 28px;
-  height: 28px;
-}
-
-.right-col .feed-title .avatar,
-.right-col .feed-title .avatar.ph {
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  font-size: 0.78rem;
-}
-
-.right-col .feed-title .block-btn {
-  width: 15px;
-  height: 15px;
+.trench-item.feed-item .block-btn {
+  width: 16px;
+  height: 16px;
   right: -2px;
   bottom: -2px;
 }
 
-.right-col .feed-title .block-btn svg {
-  width: 8px;
-  height: 8px;
+.trench-item.feed-item .trench-name-block {
+  gap: 2px;
+  min-height: 0;
+  min-width: 0;
+  justify-content: flex-start;
+  padding-top: 0;
+  overflow: hidden;
 }
 
-.right-col .feed-title .img-search {
-  border-radius: 7px;
-}
-
-.right-col .feed-title .img-search svg {
-  width: 13px;
-  height: 13px;
-}
-
-.right-col .feed-top .name {
-  font-size: 0.8rem;
-  line-height: 1.25;
-}
-
-.right-col .feed-title .name-row {
+/* Name row: natural text height, top-aligned with logo — not a 36px centered box */
+.trench-item.feed-item .trench-name-block .name-row,
+.trench-item.feed-item .feed-title .name-row {
+  min-height: 0;
+  height: auto;
+  align-items: center;
   gap: 4px;
+  line-height: 1.2;
 }
 
-.right-col .feed-title .star-btn {
-  width: 13px;
-  height: 13px;
+.trench-item.feed-item .trench-name-block .name,
+.trench-item.feed-item .feed-title .name {
+  font-size: 0.84rem;
+  line-height: 1.2;
+  display: block;
+  max-height: none;
+  padding: 0;
+  margin: 0;
 }
 
-.right-col .feed-title .star-btn svg,
-.right-col .feed-title .star-btn .star-icon {
-  width: 11px;
-  height: 11px;
-}
-
-.right-col .feed-title .icon-btn {
-  width: 20px;
-  height: 20px;
-  border-radius: 6px;
-}
-
-.right-col .feed-title .icon-btn svg {
-  width: 11px;
-  height: 11px;
-}
-
-.right-col .feed-title .icon-btn.os .os-img {
-  width: 12px;
-  height: 12px;
-}
-
-.right-col .feed-top .time {
-  font-size: 0.66rem;
-  flex-shrink: 0;
-  align-self: center;
-}
-
-.right-col .feed-row,
-.right-col .out-meta {
-  gap: 4px 8px;
-  font-size: 0.68rem;
-  line-height: 1.25;
-  flex-wrap: wrap;
-  overflow: visible;
-  margin-top: 0;
-}
-
-.right-col .feed-row > *,
-.right-col .out-meta > * {
-  flex: 0 0 auto;
+/* One-line foot chips — overflow clips so height stays locked */
+.trench-item .trench-foot,
+.trench-item .feed-row,
+.trench-item .out-meta {
   white-space: nowrap;
 }
 
-.right-col .feed-row .pill,
-.right-col .out-meta .pill-out {
-  padding: 1px 5px;
-  font-size: 0.62rem;
-  border-radius: 999px;
+.trench-item .trench-foot > *,
+.trench-item .feed-row > *,
+.trench-item .out-meta > * {
+  flex-shrink: 0;
 }
 
-.right-col .feed-row .price-tag,
-.right-col .out-meta .price-tag {
-  font-weight: 600;
-  color: var(--text-soft);
+.trench-item .trench-progress {
+  flex: 1 1 56px;
+  min-width: 40px;
+  max-width: 96px;
+  overflow: hidden;
 }
 
-.right-col .feed-title .risk-badge {
-  width: 12px;
-  height: 12px;
-}
-
-.right-col .feed-title .risk-badge-icon {
-  width: 11px;
-  height: 11px;
+.trench-item .trench-links {
+  flex-shrink: 0;
+  margin-left: auto;
 }
 
 @keyframes fadeIn {
@@ -3648,106 +4250,84 @@ html[data-theme="light"] .out-meta .floor-price {
   display: flex;
   justify-content: space-between;
   gap: 8px;
-  margin-bottom: 4px;
+  margin-bottom: 0;
+  width: 100%;
 }
 
 .feed-top .name {
   font-weight: 700;
-  font-size: 0.92rem;
+  font-size: 0.84rem;
 }
 
 .feed-top .time {
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 0.72rem;
+  font-size: 0.66rem;
 }
 
 .feed-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 12px;
+  gap: 5px 8px;
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 0.74rem;
+  font-size: 0.66rem;
 }
 
 .feed-row a {
-  color: #9be7db;
+  color: color-mix(in srgb, var(--accent) 85%, var(--muted));
 }
 
 @media (max-width: 1100px) {
-  /* still no nested document scrollbar — stack panels inside locked shell */
   html,
   body {
     overflow: hidden;
     height: 100dvh;
     max-height: 100dvh;
   }
-  .layout {
+  .layout,
+  .trench-layout {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: repeat(3, minmax(28vh, 1fr));
     flex: 1 1 auto;
     min-height: 0;
-    overflow: auto; /* if both panels need space, scroll the layout area only */
-  }
-  .layout[data-feed-open="0"][data-out-open="0"],
-  .layout[data-feed-open="1"][data-out-open="0"],
-  .layout[data-feed-open="0"][data-out-open="1"] {
-    grid-template-columns: 1fr;
-    grid-template-rows: minmax(0, 1fr) auto;
-  }
-  .layout[data-feed-open="0"][data-out-open="0"] .right-col {
-    flex-direction: row;
-    width: 100%;
-    min-height: 0;
-  }
-  .layout[data-feed-open="0"][data-out-open="0"] .col-rail.is-visible {
-    flex: 1 1 0;
-    writing-mode: horizontal-tb;
-    text-orientation: mixed;
-    min-height: 44px;
-    padding: 10px 12px;
-  }
-  .right-col {
-    min-height: 50vh;
-  }
-  .layout[data-feed-open="0"][data-out-open="0"] .right-col {
-    min-height: 0;
+    overflow: auto;
+    gap: 8px;
   }
   .layout,
+  .trench-list,
   .feed,
   .table-wrap {
     scrollbar-width: none !important;
     -ms-overflow-style: none !important;
   }
   .layout::-webkit-scrollbar,
+  .trench-list::-webkit-scrollbar,
   .feed::-webkit-scrollbar,
   .table-wrap::-webkit-scrollbar {
     display: none !important;
     width: 0 !important;
     height: 0 !important;
   }
-  .feed {
-    max-height: none !important;
-  }
 }
 
 @media (max-width: 640px) {
   body {
-    padding: 14px;
+    padding: 12px;
   }
   .top {
     flex-direction: column;
     align-items: flex-start;
   }
-  .layout {
-    grid-template-rows: minmax(45vh, 1fr) minmax(45vh, 1fr);
+  .layout,
+  .trench-layout {
+    grid-template-rows: repeat(3, minmax(36vh, 1fr));
   }
-  /* hide Holders / Minted on small screens */
-  th:nth-child(8),
-  td:nth-child(8),
-  th:nth-child(9),
-  td:nth-child(9) {
-    display: none;
+  .trench-metric-num {
+    font-size: 0.98rem;
+  }
+  .out-sort-btn {
+    padding: 2px 5px;
+    font-size: 0.6rem;
   }
 }

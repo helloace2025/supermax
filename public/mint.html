@@ -18,7 +18,7 @@
         }
       })();
     </script>
-    <link rel="stylesheet" href="/mint.css?v=93" />
+    <link rel="stylesheet" href="/mint.css?v=109" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -82,7 +82,7 @@
         <nav class="top-links" aria-label="Links">
           <a
             class="top-link"
-            href="https://x.com/Robinradar_"
+            href="https://x.com/InstantSta53355"
             target="_blank"
             rel="noopener noreferrer"
             >Twitter</a
@@ -185,164 +185,95 @@
       </div>
     </div>
 
-    <main class="layout" id="mainLayout" data-feed-open="1" data-out-open="1">
-      <section class="panel hot-panel">
-        <div class="panel-head">
-          <h2 data-i18n="hotTitle">🔥 铸造热榜</h2>
+    <!-- Trench layout: 3 equal columns — 热门榜 | 实时榜 | 已铸造榜 -->
+    <main class="layout trench-layout" id="mainLayout">
+      <section class="panel trench-col hot-panel" id="hotPanel">
+        <div class="panel-head trench-head">
+          <div class="panel-head-main">
+            <span class="trench-dot trench-dot-hot" aria-hidden="true"></span>
+            <h2 data-i18n="hotTitle">热门榜</h2>
+          </div>
+          <!-- Filters sit in the header middle/right (time window + free/paid) -->
+          <div class="trench-head-tools hot-filters" id="hotFilters">
+            <div
+              class="hot-filter-group"
+              id="hotWindowSort"
+              role="group"
+              data-i18n-aria="hotWindowGroup"
+              aria-label="时间窗口"
+            >
+              <button type="button" class="hot-filter-btn" data-hot-window="5" data-i18n="th5m">
+                5分
+              </button>
+              <button type="button" class="hot-filter-btn" data-hot-window="30" data-i18n="th30m">
+                30分
+              </button>
+              <button type="button" class="hot-filter-btn is-active" data-hot-window="60" data-i18n="th1h">
+                1时
+              </button>
+            </div>
+            <span class="hot-filter-sep" aria-hidden="true"></span>
+            <div
+              class="hot-filter-group"
+              id="hotPriceFilter"
+              role="group"
+              data-i18n-aria="priceFilterTitle"
+              aria-label="价格筛选"
+            >
+              <button type="button" class="hot-filter-btn" data-price-filter="all" data-i18n="priceFilterAll">
+                全部
+              </button>
+              <button type="button" class="hot-filter-btn" data-price-filter="free" data-i18n="priceFilterFree">
+                免费
+              </button>
+              <button type="button" class="hot-filter-btn" data-price-filter="paid" data-i18n="priceFilterPaid">
+                付费
+              </button>
+            </div>
+          </div>
         </div>
-        <div class="table-wrap hide-scrollbar">
-          <table>
-            <!-- col widths: only 集合 flexes; metrics shrink-wrap (see mint.css) -->
-            <colgroup>
-              <col class="c-rank" />
-              <col class="c-name" />
-              <col class="c-m5" />
-              <col class="c-m30" />
-              <col class="c-m1h" />
-              <col class="c-price" />
-              <col class="c-holders" />
-              <col class="c-minted" />
-              <col class="c-recent" />
-            </colgroup>
-            <thead>
-              <tr>
-                <th>#</th>
-                <th data-i18n="thCollection">集合</th>
-                <th data-i18n="th5m">5 分钟</th>
-                <th data-i18n="th30m">30 分钟</th>
-                <th data-i18n="th1h">1 小时</th>
-                <th class="th-price">
-                  <div class="th-price-inner">
-                    <span data-i18n="thPrice">价格</span>
-                    <button
-                      type="button"
-                      class="price-filter-trigger"
-                      id="btnPriceFilter"
-                      aria-haspopup="menu"
-                      aria-expanded="false"
-                      aria-controls="priceFilterMenu"
-                      title="Filter"
-                    >
-                      <svg class="price-filter-icon" viewBox="0 0 24 24" aria-hidden="true">
-                        <path
-                          fill="currentColor"
-                          d="M3 5.25A.75.75 0 0 1 3.75 4.5h16.5a.75.75 0 0 1 .53 1.28l-6.03 6.03v5.44a.75.75 0 0 1-1.13.65l-3-1.8a.75.75 0 0 1-.37-.65v-3.64L3.22 5.78A.75.75 0 0 1 3 5.25z"
-                        />
-                      </svg>
-                    </button>
-                    <div class="price-filter-menu" id="priceFilterMenu" role="menu" hidden>
-                      <button type="button" class="price-filter-opt" role="menuitemradio" data-price-filter="all" data-i18n="priceFilterAll">
-                        全部
-                      </button>
-                      <button type="button" class="price-filter-opt" role="menuitemradio" data-price-filter="free" data-i18n="priceFilterFree">
-                        免费
-                      </button>
-                      <button type="button" class="price-filter-opt" role="menuitemradio" data-price-filter="paid" data-i18n="priceFilterPaid">
-                        付费
-                      </button>
-                    </div>
-                  </div>
-                </th>
-                <th data-i18n="thHolders">Holders</th>
-                <th data-i18n="thMinted">已铸造</th>
-                <th data-i18n="thRecent">最近</th>
-              </tr>
-            </thead>
-            <tbody id="hotBody">
-              <tr>
-                <td colspan="9" class="empty" data-i18n="hotLoading">正在拉取链上 mint…</td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="trench-list hide-scrollbar" id="hotBody" data-i18n-empty="hotLoading">
+          <div class="empty" data-i18n="hotLoading">正在拉取链上 mint…</div>
         </div>
       </section>
 
-      <div class="right-col" id="rightCol">
-        <!-- Collapsed rail: restore feed -->
-        <button
-          type="button"
-          class="col-rail"
-          id="railFeed"
-          data-col="feed"
-          hidden
-          aria-controls="feedPanel"
-        >
-          <span class="col-rail-icon" aria-hidden="true">⚡</span>
-          <span class="col-rail-label" data-i18n="feedTitleShort">实时流</span>
-        </button>
-        <section class="panel feed-panel" id="feedPanel" data-col="feed">
-          <div class="panel-head">
-            <div class="panel-head-main">
-              <h2 data-i18n="feedTitle">⚡ 实时铸造流</h2>
-              <span class="hint" data-i18n="feedHint">from 0x0 · ERC-721</span>
-            </div>
-            <button
-              type="button"
-              class="col-toggle"
-              id="btnCollapseFeed"
-              data-col="feed"
-              data-i18n-aria="collapseFeed"
-              aria-expanded="true"
-              aria-controls="feed"
-              title="折叠"
-            >
-              <span class="col-toggle-icon" aria-hidden="true"></span>
-            </button>
+      <section class="panel trench-col feed-panel" id="feedPanel">
+        <div class="panel-head trench-head">
+          <div class="panel-head-main">
+            <span class="trench-dot trench-dot-live" aria-hidden="true"></span>
+            <h2 data-i18n="feedTitle">实时榜</h2>
+            <span class="hint" data-i18n="feedHint">from 0x0 · ERC-721</span>
           </div>
-          <div class="feed hide-scrollbar" id="feed"></div>
-        </section>
+        </div>
+        <div class="trench-list feed hide-scrollbar" id="feed"></div>
+      </section>
 
-        <!-- Collapsed rail: restore minted-out -->
-        <button
-          type="button"
-          class="col-rail"
-          id="railOut"
-          data-col="out"
-          hidden
-          aria-controls="outPanel"
-        >
-          <span class="col-rail-icon" aria-hidden="true">🏁</span>
-          <span class="col-rail-label" data-i18n="outTitleShort">已铸完</span>
-        </button>
-        <section class="panel out-panel" id="outPanel" data-col="out">
-          <div class="panel-head">
-            <div class="panel-head-main">
-              <h2 data-i18n="outTitle">🏁 已铸完</h2>
-              <span class="hint" data-i18n="outHint">MINT OUT · 仍可跟进</span>
-            </div>
-            <div
-              class="out-sort"
-              id="outSort"
-              role="group"
-              data-i18n-aria="outSortGroup"
-              aria-label="已铸完排序"
-            >
-              <button type="button" class="out-sort-btn is-active" data-out-sort="recent" data-i18n="outSortRecent">
-                最近
-              </button>
-              <button type="button" class="out-sort-btn" data-out-sort="volume" data-i18n="outSortVolume">
-                交易额
-              </button>
-              <button type="button" class="out-sort-btn" data-out-sort="floor" data-i18n="outSortFloor">
-                地板价
-              </button>
-            </div>
-            <button
-              type="button"
-              class="col-toggle"
-              id="btnCollapseOut"
-              data-col="out"
-              data-i18n-aria="collapseOut"
-              aria-expanded="true"
-              aria-controls="mintedOut"
-              title="折叠"
-            >
-              <span class="col-toggle-icon" aria-hidden="true"></span>
+      <section class="panel trench-col out-panel" id="outPanel">
+        <div class="panel-head trench-head">
+          <div class="panel-head-main">
+            <span class="trench-dot trench-dot-out" aria-hidden="true"></span>
+            <h2 data-i18n="outTitle">已铸造榜</h2>
+          </div>
+          <div
+            class="out-sort"
+            id="outSort"
+            role="group"
+            data-i18n-aria="outSortGroup"
+            aria-label="已铸完排序"
+          >
+            <button type="button" class="out-sort-btn is-active" data-out-sort="recent" data-i18n="outSortRecent">
+              最近
+            </button>
+            <button type="button" class="out-sort-btn" data-out-sort="volume" data-i18n="outSortVolume">
+              交易额
+            </button>
+            <button type="button" class="out-sort-btn" data-out-sort="floor" data-i18n="outSortFloor">
+              地板价
             </button>
           </div>
-          <div class="feed hide-scrollbar" id="mintedOut"></div>
-        </section>
-      </div>
+        </div>
+        <div class="trench-list feed hide-scrollbar" id="mintedOut"></div>
+      </section>
     </main>
 
     <!-- status kept off-DOM-visible for JS only -->
@@ -471,6 +402,6 @@
       </div>
     </div>
 
-    <script src="/mint.js?v=93"></script>
+    <script src="/mint.js?v=109"></script>
   </body>
 </html>

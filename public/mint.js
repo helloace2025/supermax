@@ -7,6 +7,8 @@
   const FAV_KEY = "mint-radar-favorites";
   const FAV_META_KEY = "mint-radar-favorites-meta";
   const PRICE_FILTER_KEY = "mint-radar-price-filter";
+  /** Hot list ranking window minutes: 5 | 30 | 60 */
+  const HOT_WINDOW_KEY = "mint-radar-hot-window-v1";
   /** Side columns: feed / minted-out open state (hot is always open) */
   const COL_LAYOUT_KEY = "mint-radar-col-layout-v1";
   /** Minted-out list sort: recent | volume | floor */
@@ -21,7 +23,8 @@
 
   const EYE_SLASH_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M2.1 3.51 3.51 2.1l18.38 18.39-1.41 1.41-3.1-3.1A11.4 11.4 0 0 1 12 19c-5 0-9.27-3.11-11-7.5a12.3 12.3 0 0 1 4.18-5.09L2.1 3.51zM12 7a5 5 0 0 1 5 5c0 .7-.14 1.36-.4 1.97l-1.57-1.57A2.99 2.99 0 0 0 12 9c-.4 0-.78.08-1.13.23L9.3 7.66A4.96 4.96 0 0 1 12 7zm0-5c5 0 9.27 3.11 11 7.5a12.48 12.48 0 0 1-4.05 5.04l-1.45-1.45A10.4 10.4 0 0 0 21.17 9.5 10.46 10.46 0 0 0 12 4c-1.08 0-2.12.16-3.1.46L7.35 2.9A12.3 12.3 0 0 1 12 2zM8.12 9.54 9.6 11A3 3 0 0 0 12 15c.36 0 .7-.06 1.02-.18l1.48 1.48A5 5 0 0 1 8.12 9.54z"/></svg>`;
   /* Outline star — stroke follows currentColor so light/dark themes flip black↔white */
-  const STAR_SVG = `<svg class="star-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none"><path d="M12 3.1l2.45 5.55 6 .55-4.55 3.95 1.4 5.85L12 15.85 6.7 19l1.4-5.85-4.55-3.95 6-.55L12 3.1z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round" fill="none"/></svg>`;
+  /* Symmetric heart about x=12 (Heroicons 24 outline). Filled when .is-on */
+  const STAR_SVG = `<svg class="star-icon heart-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none"><path d="M21 8.25c0-2.485-2.099-4.5-4.688-4.5-1.935 0-3.597 1.126-4.312 2.733C11.285 4.876 9.623 3.75 7.688 3.75 5.1 3.75 3 5.765 3 8.25c0 7.22 9 12 9 12s9-4.78 9-12z" stroke="currentColor" stroke-width="1.65" stroke-linejoin="round" stroke-linecap="round" fill="none"/></svg>`;
   const SEARCH_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>`;
 
   /**
@@ -146,11 +149,11 @@
       themeDark: "深色",
       themeToggleTitle: "切换主题",
       langToggleTitle: "切换语言",
-      hotTitle: "🔥 铸造热榜",
+      hotTitle: "热门榜",
       thCollection: "集合",
-      th5m: "5 分钟",
-      th30m: "30 分钟",
-      th1h: "1 小时",
+      th5m: "5分",
+      th30m: "30分",
+      th1h: "1时",
       thPrice: "价格",
       thHolders: "Holders",
       thMinted: "已铸造",
@@ -160,19 +163,20 @@
       priceFilterAll: "全部",
       priceFilterFree: "免费",
       priceFilterPaid: "付费",
-      priceFilterTitle: "按价格筛选",
+      priceFilterTitle: "价格筛选",
+      hotWindowGroup: "时间窗口排序",
       mintOut: "MINT OUT",
       mintProgressTitle: (minted, max, pct) =>
         `进度 ${minted} / ${max}（${pct}%）`,
       mintProgressUnknown: "上限未知（开放铸造或合约未读到 maxSupply）",
       hotLoading: "正在拉取链上 mint…",
       hotEmpty: "暂无铸造数据（或仍在预热缓存）…",
-      feedTitle: "⚡ 实时铸造流",
-      feedTitleShort: "实时流",
+      feedTitle: "实时榜",
+      feedTitleShort: "实时榜",
       feedHint: "from 0x0 · ERC-721",
       feedEmpty: "暂无铸造事件",
-      outTitle: "🏁 已铸完",
-      outTitleShort: "已铸完",
+      outTitle: "已铸造榜",
+      outTitleShort: "已铸造榜",
       outHint: "MINT OUT · 仍可跟进",
       outEmpty: "暂无已铸完项目",
       outSortLabel: "排序",
@@ -326,11 +330,11 @@
       themeDark: "Dark",
       themeToggleTitle: "Switch theme",
       langToggleTitle: "Switch language",
-      hotTitle: "🔥 Mint Leaderboard",
+      hotTitle: "Hot",
       thCollection: "Collection",
-      th5m: "5 min",
-      th30m: "30 min",
-      th1h: "1 hour",
+      th5m: "5m",
+      th30m: "30m",
+      th1h: "1h",
       thPrice: "Price",
       thHolders: "Holders",
       thMinted: "Minted",
@@ -340,19 +344,20 @@
       priceFilterAll: "All",
       priceFilterFree: "Free",
       priceFilterPaid: "Paid",
-      priceFilterTitle: "Filter by price",
+      priceFilterTitle: "Price filter",
+      hotWindowGroup: "Rank by time window",
       mintOut: "MINT OUT",
       mintProgressTitle: (minted, max, pct) =>
         `Progress ${minted} / ${max} (${pct}%)`,
       mintProgressUnknown: "Max supply unknown (open edition or unread maxSupply)",
       hotLoading: "Loading on-chain mints…",
       hotEmpty: "No mint data yet (or still warming cache)…",
-      feedTitle: "⚡ Live mint feed",
-      feedTitleShort: "Live feed",
+      feedTitle: "Live",
+      feedTitleShort: "Live",
       feedHint: "from 0x0 · ERC-721",
       feedEmpty: "No mint events yet",
-      outTitle: "🏁 Minted Out",
-      outTitleShort: "Minted out",
+      outTitle: "Minted Out",
+      outTitleShort: "Minted Out",
       outHint: "MINT OUT · still trackable",
       outEmpty: "No sold-out collections yet",
       outSortLabel: "Sort",
@@ -478,13 +483,15 @@
     return "dark";
   }
 
-  /** Fixed ranking window: who appears on the board (5m/30m/1h columns carry the volume detail). */
+  /** Default ranking window (minutes) when nothing stored. */
   const RANK_WINDOW_MIN = 60;
 
   let lang = detectLang();
   let theme = detectTheme();
   /** @type {"all"|"free"|"paid"} */
   let priceFilter = loadPriceFilter();
+  /** @type {5|30|60} active hot-list sort window (minutes) */
+  let hotWindow = loadHotWindow();
   /** @type {"recent"|"volume"|"floor"} */
   let outSort = loadOutSort();
   let timer = null;
@@ -1010,6 +1017,7 @@
     updateFavoritesUi();
     renderUpdatesList();
     syncPriceFilterUi();
+    syncHotWindowUi();
     syncColToggleLabels();
     syncOutSortUi();
     if (typeof window.__renderRaffleModal === "function") {
@@ -1057,8 +1065,19 @@
     btn.title = `${hint} · ${name}`;
   }
 
+  /** Clear after theme paint — must not leave transitions off forever */
+  let themeSwitchClearTimer = 0;
+
   function applyThemeUi() {
-    document.documentElement.setAttribute("data-theme", theme);
+    const root = document.documentElement;
+    /*
+     * Theme flips change dozens of CSS variables. If color/background transitions
+     * stay on, every card + panel animates at once → multi-frame jank.
+     * .theme-switching freezes transitions/animations for one paint cycle.
+     */
+    root.classList.add("theme-switching");
+    root.setAttribute("data-theme", theme);
+    root.style.colorScheme = theme === "light" ? "light" : "dark";
     syncThemeToggle();
     const meta = document.getElementById("metaThemeColor");
     if (meta) {
@@ -1067,6 +1086,21 @@
         theme === "light" ? "#f4f6fb" : "#0B1220"
       );
     }
+    if (themeSwitchClearTimer) {
+      clearTimeout(themeSwitchClearTimer);
+      themeSwitchClearTimer = 0;
+    }
+    // Two rAFs: let the browser commit the new theme without animating
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        root.classList.remove("theme-switching");
+      });
+    });
+    // Safety net if rAF is delayed (background tab)
+    themeSwitchClearTimer = window.setTimeout(() => {
+      root.classList.remove("theme-switching");
+      themeSwitchClearTimer = 0;
+    }, 120);
   }
 
   function setTheme(next) {
@@ -1096,7 +1130,8 @@
     }
     applyStaticI18n();
     if (lastData) {
-      renderAll(lastData, { forceMintedOut: true });
+      // Language rebuilds card copy — force full list remount once
+      renderAll(lastData, { forceMintedOut: true, forceLists: true });
     } else {
       els.statusLine.textContent = t("statusWaiting");
     }
@@ -1921,12 +1956,27 @@
     syncOutSortUi();
   }
 
-  /** Always hide Uniswap LP position NFTs (no UI toggle). */
+  /**
+   * Liquidity-position / AMM LP NFTs (not collectibles).
+   * Avoid bare "Position NFT" — real drops use that (e.g. "up Position NFT").
+   */
   function isLpNft(row) {
-    return (
-      /UNI-V[34]|Positions NFT/i.test(row?.name || "") ||
-      /UNI-V[34]/i.test(row?.symbol || "")
-    );
+    const name = String(row?.name || "");
+    const symbol = String(row?.symbol || "");
+    if (
+      /liquidity[\s_-]*position|liquidityposition|concentrated[\s_-]*liquidity|uni[\s_-]?v[34]|uniswap|^\s*lp[\s_-]|[\s_-]lp[\s_-]?nft\b|\blp[\s_-]?position\b|positions?\s+manager/i.test(
+        name
+      ) ||
+      /UNI-V[34]|liquidity|^\s*LP\b/i.test(symbol)
+    ) {
+      return true;
+    }
+    // Huge packed token ids (LP / position managers) — not sequential collectible #1..N
+    const tid = String(row?.tokenId ?? "").replace(/^0x/i, "");
+    if (/^\d{24,}$/.test(tid)) return true;
+    const c = String(row?.contract || "").toLowerCase();
+    if (c === "0x1e1577ba4dc74007ed6e8fb3d3ce2ce5477f531d") return true;
+    return false;
   }
 
   /**
@@ -1961,6 +2011,24 @@
       /* ignore */
     }
     return "all";
+  }
+
+  function loadHotWindow() {
+    try {
+      const n = Number(localStorage.getItem(HOT_WINDOW_KEY));
+      if (n === 5 || n === 30 || n === 60) return n;
+    } catch {
+      /* ignore */
+    }
+    return RANK_WINDOW_MIN;
+  }
+
+  function persistHotWindow() {
+    try {
+      localStorage.setItem(HOT_WINDOW_KEY, String(hotWindow));
+    } catch {
+      /* ignore */
+    }
   }
 
   function loadOutSort() {
@@ -2019,108 +2087,64 @@
     return "unknown";
   }
 
-  let priceFilterMenuOpen = false;
-  let priceFilterIgnoreOutsideUntil = 0;
-
   function setPriceFilter(next) {
     if (next !== "free" && next !== "paid" && next !== "all") return;
-    if (priceFilter === next) {
-      closePriceFilterMenu();
-      return;
-    }
+    if (priceFilter === next) return;
     priceFilter = next;
     persistPriceFilter();
     syncPriceFilterUi();
-    closePriceFilterMenu();
     if (lastData) renderAll(lastData, { forceMintedOut: true });
   }
 
-  function isPriceFilterMenuOpen() {
-    const menu = $("priceFilterMenu");
-    return (
-      priceFilterMenuOpen &&
-      menu &&
-      !menu.hidden &&
-      menu.classList.contains("is-open")
-    );
+  function setHotWindow(next) {
+    const n = Number(next);
+    if (n !== 5 && n !== 30 && n !== 60) return;
+    if (hotWindow === n) return;
+    hotWindow = n;
+    persistHotWindow();
+    syncHotWindowUi();
+    // Soft reorder/FLIP — no force remount
+    if (lastData) renderAll(lastData, { forceMintedOut: false });
   }
 
-  function positionPriceFilterMenu() {
-    const btn = $("btnPriceFilter");
-    const menu = $("priceFilterMenu");
-    if (!btn || !menu || !isPriceFilterMenuOpen()) return;
-    const rect = btn.getBoundingClientRect();
-    const gap = 6;
-    const width = Math.max(104, menu.offsetWidth || 104);
-    let left = rect.left;
-    if (left + width > window.innerWidth - 8) {
-      left = Math.max(8, window.innerWidth - width - 8);
-    }
-    let top = rect.bottom + gap;
-    menu.style.position = "fixed";
-    menu.style.left = `${left}px`;
-    menu.style.top = `${top}px`;
-    menu.style.right = "auto";
-    requestAnimationFrame(() => {
-      if (!isPriceFilterMenuOpen()) return;
-      const h = menu.offsetHeight || 80;
-      if (top + h > window.innerHeight - 8 && rect.top > h + gap) {
-        menu.style.top = `${Math.max(8, rect.top - h - gap)}px`;
-      }
+  function syncHotWindowUi() {
+    document.querySelectorAll("[data-hot-window]").forEach((el) => {
+      const n = Number(el.getAttribute("data-hot-window"));
+      const on = n === hotWindow;
+      el.classList.toggle("is-active", on);
+      el.setAttribute("aria-checked", on ? "true" : "false");
+      el.setAttribute("aria-pressed", on ? "true" : "false");
     });
   }
 
-  function openPriceFilterMenu() {
-    const btn = $("btnPriceFilter");
-    let menu = $("priceFilterMenu");
-    if (!btn || !menu) return;
-    // Body layer so sticky/overflow table does not clip the menu
-    if (menu.parentElement !== document.body) {
-      document.body.appendChild(menu);
-    }
-    priceFilterMenuOpen = true;
-    menu.hidden = false;
-    menu.removeAttribute("hidden");
-    menu.classList.add("is-open");
-    btn.setAttribute("aria-expanded", "true");
-    syncPriceFilterUi();
-    positionPriceFilterMenu();
-    priceFilterIgnoreOutsideUntil = Date.now() + 200;
+  /** Mint count field for the active hot-window sort. */
+  function hotWindowMints(r) {
+    if (hotWindow === 5) return Number(r?.mints5m || 0);
+    if (hotWindow === 30) return Number(r?.mints30m || 0);
+    return Number(r?.mints1h || r?.mints || 0);
   }
 
-  function closePriceFilterMenu() {
-    priceFilterMenuOpen = false;
-    const btn = $("btnPriceFilter");
-    const menu = $("priceFilterMenu");
-    if (btn) btn.setAttribute("aria-expanded", "false");
-    if (!menu) return;
-    menu.classList.remove("is-open");
-    menu.hidden = true;
-    menu.setAttribute("hidden", "");
+  /** Short unit label for the active window (card right metric). */
+  function hotWindowUnitLabel() {
+    if (hotWindow === 5) return "5m";
+    if (hotWindow === 30) return "30m";
+    return "1h";
   }
 
-  function togglePriceFilterMenu(ev) {
-    if (ev) {
-      ev.preventDefault();
-      ev.stopPropagation();
-    }
-    if (isPriceFilterMenuOpen()) closePriceFilterMenu();
-    else openPriceFilterMenu();
+  function hotWindowTitleKey() {
+    if (hotWindow === 5) return "th5m";
+    if (hotWindow === 30) return "th30m";
+    return "th1h";
   }
 
   function syncPriceFilterUi() {
-    const btn = $("btnPriceFilter");
-    if (btn) {
-      btn.classList.toggle("is-active", priceFilter === "free" || priceFilter === "paid");
-      const title = t("priceFilterTitle");
-      btn.title = title;
-      btn.setAttribute("aria-label", title);
-    }
     document.querySelectorAll("[data-price-filter]").forEach((el) => {
       const mode = el.getAttribute("data-price-filter");
       const on = mode === priceFilter;
+      el.classList.toggle("is-active", on);
       el.classList.toggle("active", on);
       el.setAttribute("aria-checked", on ? "true" : "false");
+      el.setAttribute("aria-pressed", on ? "true" : "false");
     });
   }
 
@@ -2134,6 +2158,15 @@
         if (priceFilter === "free") return cat === "free";
         if (priceFilter === "paid") return cat === "paid";
         return true;
+      })
+      .sort((a, b) => {
+        const db = hotWindowMints(b);
+        const da = hotWindowMints(a);
+        if (db !== da) return db - da;
+        // Stable tie-break: 1h then last mint
+        const h1 = Number(b?.mints1h || 0) - Number(a?.mints1h || 0);
+        if (h1) return h1;
+        return Number(b?.lastMintAt || 0) - Number(a?.lastMintAt || 0);
       });
   }
 
@@ -2171,111 +2204,445 @@
     return `${eth} ETH`;
   }
 
-  function renderHot(data) {
-    const list = filterHot(pickHot(data));
-
-    if (!list.length) {
-      els.hotBody.innerHTML = `<tr><td colspan="9" class="empty">${escapeHtml(
-        t("hotEmpty")
-      )}</td></tr>`;
-      return;
-    }
-
-    els.hotBody.innerHTML = list
-      .map((r, i) => {
-        const rankClass = i < 3 ? "rank top" : "rank";
-        const priceText = formatPriceCell(r);
-        const priceTitle = priceText;
-        const fullName = r.name || "Unknown";
-        const fullSym = String(r.symbol || "").trim();
-        const symShow = ellipsize(fullSym);
-        // symbol only — no contract address (OpenSea / explorer cover that)
-        const metaHtml = symShow
-          ? `<span class="meta" title="${escapeHtml(fullSym)}">${escapeHtml(symShow)}</span>`
-          : `<span class="meta meta-empty" aria-hidden="true"></span>`;
-        return `<tr>
-          <td class="${rankClass}">${i + 1}</td>
-          <td>
-            <div class="col-row">
-              <div class="col-media">
-                ${avatarHtml(r)}
-                ${mintProgressHtml(r)}
-              </div>
-              <div class="col-name">
-                <div class="name-row">
-                  <a class="name" href="${r.explorerToken}" target="_blank" rel="noopener" title="${escapeHtml(fullName)}">${escapeHtml(ellipsize(fullName))}</a>
-                  ${riskBadgeHtml(r)}
-                  ${starBtnHtml(r)}
-                </div>
-                ${metaHtml}
-                <span class="meta links">
-                  ${socialsHtml(r)}
-                  <a class="explorer-link" href="${r.explorerToken}" target="_blank" rel="noopener" title="Blockscout">${escapeHtml(t("explorer"))}</a>
-                </span>
-              </div>
-            </div>
-          </td>
-          <td class="num">${fmtNum(r.mints5m)}</td>
-          <td class="num">${fmtNum(r.mints30m)}</td>
-          <td class="num">${fmtNum(r.mints1h)}</td>
-          <td class="num price-cell" title="${escapeHtml(priceTitle)}">${escapeHtml(priceText)}</td>
-          <td class="num">${fmtNum(r.holders)}</td>
-          <td class="num">${fmtNum(r.minted ?? r.totalSupply)}</td>
-          <td>
-            <a href="${r.explorerTx}" target="_blank" rel="noopener" class="num">${relTime(r.lastMintAt)}</a>
-          </td>
-        </tr>`;
-      })
-      .join("");
+  /** Mount one card from HTML string. */
+  function mountCard(html) {
+    const tpl = document.createElement("template");
+    tpl.innerHTML = String(html || "").trim();
+    return tpl.content.firstElementChild;
   }
 
-  function renderFeed(data) {
-    let feed = Array.isArray(data.feed) ? data.feed : [];
-    feed = feed.filter((e) => !isBlocked(e.contract) && !isNoiseNft(e));
+  /**
+   * Soft stream list: reuse cards by stable key, FLIP reorder, enter animation for new rows.
+   * Avoids full innerHTML thrash every poll (no hard jump).
+   */
+  function reconcileStreamList(container, items, {
+    keyOf,
+    htmlOf,
+    sigOf,
+    emptyHtml,
+    force = false,
+    patchEl = null,
+    /** Feed: prepend feel — new items animate from top */
+    enterFromTop = false,
+  } = {}) {
+    if (!container) return;
 
-    if (!feed.length) {
-      els.feed.innerHTML = `<div class="empty">${escapeHtml(t("feedEmpty"))}</div>`;
+    if (!items.length) {
+      container.innerHTML = emptyHtml || "";
       return;
     }
+
+    // Drop empty-state node if present
+    for (const child of [...container.children]) {
+      if (child.classList?.contains("empty") && !child.dataset?.streamKey) {
+        child.remove();
+      }
+    }
+
+    if (force) {
+      container.innerHTML = "";
+    }
+
+    const scrollTop = container.scrollTop;
+    const prevEls = [...container.children].filter((el) => el.dataset?.streamKey);
+    const byKey = new Map(prevEls.map((el) => [el.dataset.streamKey, el]));
+    const firstRect = new Map();
+    for (const el of prevEls) {
+      firstRect.set(el.dataset.streamKey, el.getBoundingClientRect());
+    }
+
+    const nextKeys = new Set(items.map((it, i) => keyOf(it, i)));
+    for (const [k, el] of byKey) {
+      if (!nextKeys.has(k)) {
+        // Remove immediately so reorder math stays correct (enter/FLIP carry the soft feel)
+        el.remove();
+        byKey.delete(k);
+      }
+    }
+
+    const ordered = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const key = keyOf(item, i);
+      const sig = sigOf ? sigOf(item, i) : "";
+      let el = byKey.get(key);
+      let isNew = false;
+
+      if (!el) {
+        el = mountCard(htmlOf(item, i));
+        if (!el) continue;
+        el.dataset.streamKey = key;
+        if (sig) el.dataset.streamSig = sig;
+        el.classList.add("stream-enter");
+        if (enterFromTop) el.classList.add("stream-enter-top");
+        isNew = true;
+        byKey.set(key, el);
+      } else if (sig && el.dataset.streamSig !== sig) {
+        if (typeof patchEl === "function" && patchEl(el, item, i)) {
+          el.dataset.streamSig = sig;
+        } else {
+          // Rebuild card but keep loaded avatar <img> to avoid logo flash
+          const neu = mountCard(htmlOf(item, i));
+          if (neu) {
+            neu.dataset.streamKey = key;
+            neu.dataset.streamSig = sig;
+            const oldImg = el.querySelector("img.avatar");
+            const newImg = neu.querySelector("img.avatar");
+            if (
+              oldImg &&
+              newImg &&
+              oldImg.getAttribute("src") &&
+              oldImg.getAttribute("src") === newImg.getAttribute("src")
+            ) {
+              newImg.replaceWith(oldImg);
+            }
+            el.replaceWith(neu);
+            el = neu;
+            byKey.set(key, el);
+          }
+        }
+      }
+      ordered.push({ el, isNew, key });
+    }
+
+    // Reorder to match data order (minimal insertBefore thrash)
+    for (let i = 0; i < ordered.length; i++) {
+      const { el } = ordered[i];
+      const current = container.children[i];
+      if (current !== el) {
+        container.insertBefore(el, current || null);
+      }
+    }
+    // Drop any non-keyed leftovers still above length
+    while (container.children.length > ordered.length) {
+      const last = container.lastElementChild;
+      if (last?.dataset?.streamKey && nextKeys.has(last.dataset.streamKey)) break;
+      if (last) last.remove();
+      else break;
+    }
+
+    // FLIP: animate position shifts for existing cards
+    const reduceMotion =
+      typeof matchMedia === "function" &&
+      matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (!reduceMotion) {
+      for (const { el, isNew, key } of ordered) {
+        if (isNew) continue;
+        const first = firstRect.get(key);
+        if (!first) continue;
+        const last = el.getBoundingClientRect();
+        const dy = first.top - last.top;
+        if (Math.abs(dy) < 1.5) continue;
+        try {
+          el.animate(
+            [
+              { transform: `translateY(${dy}px)` },
+              { transform: "translateY(0)" },
+            ],
+            {
+              duration: 380,
+              easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+              fill: "both",
+            }
+          );
+        } catch {
+          /* older browsers */
+        }
+      }
+    }
+
+    // Preserve scroll so list doesn't jump under the cursor
+    container.scrollTop = scrollTop;
+
+    // Clean enter class after animation
+    for (const { el, isNew } of ordered) {
+      if (!isNew) continue;
+      const clear = () => {
+        el.classList.remove("stream-enter", "stream-enter-top");
+      };
+      el.addEventListener("animationend", clear, { once: true });
+      window.setTimeout(clear, 500);
+    }
+  }
+
+  function hotCardHtml(r, i) {
+    const rankClass = i < 3 ? "trench-rank is-top" : "trench-rank";
+    const priceText = formatPriceCell(r);
+    const fullName = r.name || "Unknown";
+    const fullSym = String(r.symbol || "").trim();
+    const symShow = ellipsize(fullSym);
+    const metaBits = [];
+    if (symShow) {
+      metaBits.push(
+        `<span class="trench-sym" title="${escapeHtml(fullSym)}">${escapeHtml(symShow)}</span>`
+      );
+    }
+    metaBits.push(
+      `<span class="trench-price" title="${escapeHtml(priceText)}">${escapeHtml(priceText)}</span>`
+    );
+    const winCount = hotWindowMints(r);
+    const winUnit = hotWindowUnitLabel();
+    const winTitle = t(hotWindowTitleKey());
+    return `<article class="trench-item hot-item">
+      <div class="${rankClass}">${i + 1}</div>
+      <div class="trench-body">
+        <div class="trench-top">
+          <div class="trench-id">
+            ${avatarHtml(r)}
+            <div class="trench-name-block">
+              <div class="name-row">
+                <a class="name" href="${r.explorerToken}" target="_blank" rel="noopener" title="${escapeHtml(fullName)}">${escapeHtml(ellipsize(fullName))}</a>
+                ${riskBadgeHtml(r)}
+                ${starBtnHtml(r)}
+              </div>
+              <div class="trench-sub">${metaBits.join('<span class="trench-dot-sep" aria-hidden="true">·</span>')}</div>
+            </div>
+          </div>
+          <div class="trench-metric" title="${escapeHtml(winTitle)} · ${fmtNum(winCount)}">
+            <b class="trench-metric-num">${fmtNum(winCount)}</b>
+            <span class="trench-metric-unit">${escapeHtml(winUnit)}</span>
+          </div>
+        </div>
+        <div class="trench-foot">
+          <div class="trench-progress">${mintProgressHtml(r)}</div>
+          <span class="trench-meta-chip trench-chip-holders">H ${fmtNum(r.holders)}</span>
+          <span class="trench-meta-chip trench-chip-minted">M ${fmtNum(r.minted ?? r.totalSupply)}</span>
+          <a class="trench-meta-chip trench-recent" href="${r.explorerTx}" target="_blank" rel="noopener">${relTime(r.lastMintAt)}</a>
+          <span class="trench-links">
+            ${socialsHtml(r)}
+          </span>
+        </div>
+      </div>
+    </article>`;
+  }
+
+  function hotItemSig(r, i) {
+    const c = String(r?.contract || "").toLowerCase();
+    return [
+      i,
+      hotWindow,
+      hotWindowMints(r),
+      formatPriceCell(r),
+      r?.holders ?? "",
+      r?.minted ?? r?.totalSupply ?? "",
+      r?.maxSupply ?? "",
+      r?.lastMintAt ?? "",
+      r?.name ?? "",
+      r?.symbol ?? "",
+      isFavorite(c) ? 1 : 0,
+      isHighRisk(r) ? 1 : 0,
+      iconUrlOf(r),
+      r?.twitter || "",
+      r?.website || "",
+      r?.explorerTx || "",
+    ].join("\0");
+  }
+
+  /** Rebuild X / Website / OpenSea without remounting the whole card. */
+  function patchSocialLinks(el, r) {
+    const row = el.querySelector(".trench-links");
+    if (!row) return;
+    row.innerHTML = socialsHtml(r);
+  }
+
+  /** Fast path: update rank + metric + foot chips without remounting card. */
+  function patchHotCard(el, r, i) {
+    try {
+      // Identity / media changes → full remount (preserves avatar only when same src)
+      const nameA = el.querySelector(".name");
+      const fullName = r.name || "Unknown";
+      if (nameA && nameA.getAttribute("title") !== fullName) return false;
+      const wantIcon = canUseIcon(r) ? iconUrlOf(r) : "";
+      const haveImg = el.querySelector("img.avatar");
+      const haveIcon = haveImg ? haveImg.getAttribute("src") || "" : "";
+      if (wantIcon !== haveIcon) return false;
+
+      const rank = el.querySelector(".trench-rank");
+      if (rank) {
+        rank.textContent = String(i + 1);
+        rank.classList.toggle("is-top", i < 3);
+      }
+      const num = el.querySelector(".trench-metric-num");
+      const unit = el.querySelector(".trench-metric-unit");
+      const metric = el.querySelector(".trench-metric");
+      if (num) num.textContent = fmtNum(hotWindowMints(r));
+      if (unit) unit.textContent = hotWindowUnitLabel();
+      if (metric) {
+        metric.title = `${t(hotWindowTitleKey())} · ${fmtNum(hotWindowMints(r))}`;
+      }
+      const price = el.querySelector(".trench-price");
+      if (price) {
+        const p = formatPriceCell(r);
+        price.textContent = p;
+        price.title = p;
+      }
+      const holders = el.querySelector(".trench-chip-holders");
+      if (holders) holders.textContent = `H ${fmtNum(r.holders)}`;
+      const minted = el.querySelector(".trench-chip-minted");
+      if (minted) minted.textContent = `M ${fmtNum(r.minted ?? r.totalSupply)}`;
+      const recent = el.querySelector(".trench-recent");
+      if (recent) {
+        recent.textContent = relTime(r.lastMintAt);
+        if (r.explorerTx) recent.href = r.explorerTx;
+      }
+      const progress = el.querySelector(".trench-progress");
+      if (progress) progress.innerHTML = mintProgressHtml(r);
+      const star = el.querySelector(".star-btn");
+      if (star) {
+        const c = String(r.contract || "").toLowerCase();
+        const on = isFavorite(c);
+        star.classList.toggle("is-on", on);
+        star.setAttribute("aria-pressed", on ? "true" : "false");
+        const lab = on ? t("unfavoriteTitle") : t("favoriteTitle");
+        star.title = lab;
+        star.setAttribute("aria-label", lab);
+      }
+      // Risk badge: add/remove if needed
+      const nameRow = el.querySelector(".name-row");
+      if (nameRow) {
+        const has = !!nameRow.querySelector(".risk-badge");
+        const need = isHighRisk(r);
+        if (has !== need) {
+          const badge = nameRow.querySelector(".risk-badge");
+          if (badge) badge.remove();
+          if (need) {
+            const starBtn = nameRow.querySelector(".star-btn");
+            const tmp = document.createElement("div");
+            tmp.innerHTML = riskBadgeHtml(r);
+            const node = tmp.firstElementChild;
+            if (node && starBtn) nameRow.insertBefore(node, starBtn);
+            else if (node) nameRow.appendChild(node);
+          }
+        }
+      }
+      // Critical: meta often arrives AFTER first paint — refresh X/web/OS icons in place
+      patchSocialLinks(el, r);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function feedCardHtml(e) {
+    const method = e.method
+      ? `<span class="pill mint">${escapeHtml(e.method)}</span>`
+      : "";
+    const feedSym = String(e.symbol || "").trim();
+    const feedPrice = escapeHtml(
+      e.unitPriceEth == null
+        ? t("pricePending")
+        : e.unitPriceEth === "0"
+          ? t("priceFree")
+          : `${e.unitPriceEth} ETH`
+    );
+    return `<article class="trench-item feed-item">
+      <div class="trench-top feed-top">
+        <div class="trench-id feed-title">
+          ${avatarHtml(e)}
+          <div class="trench-name-block">
+            <div class="name-row">
+              <a class="name" href="${e.explorerToken}" target="_blank" rel="noopener" title="${escapeHtml(e.name || "Unknown")}">${escapeHtml(ellipsize(e.name || "Unknown"))}</a>
+              ${riskBadgeHtml(e)}
+              ${starBtnHtml(e)}
+            </div>
+            ${
+              feedSym
+                ? `<div class="trench-sub"><span class="trench-sym" title="${escapeHtml(feedSym)}">${escapeHtml(ellipsize(feedSym))}</span></div>`
+                : `<div class="trench-sub trench-sub-spacer" aria-hidden="true">&nbsp;</div>`
+            }
+          </div>
+        </div>
+        <div class="trench-links trench-links-end">${socialsHtml(e)}</div>
+      </div>
+      <div class="trench-foot feed-row">
+        <span class="trench-meta-chip">#${escapeHtml(String(e.tokenId ?? "?"))}</span>
+        ${method}
+        <span class="price-tag trench-meta-chip">${feedPrice}</span>
+        <span class="trench-meta-chip trench-mint-time" title="${escapeHtml(String(e.timestamp || ""))}">${relTime(e.timestamp)}</span>
+      </div>
+    </article>`;
+  }
+
+  function feedItemSig(e) {
+    return [
+      e?.key || "",
+      e?.unitPriceEth ?? "",
+      e?.method || "",
+      e?.name || "",
+      e?.symbol || "",
+      isFavorite(String(e?.contract || "").toLowerCase()) ? 1 : 0,
+      // relative time bucket ~15s so we don't thrash every poll
+      Math.floor(Date.now() / 15000),
+      e?.timestamp || "",
+    ].join("\0");
+  }
+
+  function patchFeedCard(el, e) {
+    try {
+      const time = el.querySelector(".trench-mint-time");
+      if (time) {
+        time.textContent = relTime(e.timestamp);
+        time.title = String(e.timestamp || "");
+      }
+      const price = el.querySelector(".price-tag");
+      if (price) {
+        price.textContent =
+          e.unitPriceEth == null
+            ? t("pricePending")
+            : e.unitPriceEth === "0"
+              ? t("priceFree")
+              : `${e.unitPriceEth} ETH`;
+      }
+      const star = el.querySelector(".star-btn");
+      if (star) {
+        const c = String(e.contract || "").toLowerCase();
+        const on = isFavorite(c);
+        star.classList.toggle("is-on", on);
+        star.setAttribute("aria-pressed", on ? "true" : "false");
+        const lab = on ? t("unfavoriteTitle") : t("favoriteTitle");
+        star.title = lab;
+        star.setAttribute("aria-label", lab);
+      }
+      // Collection meta (twitter/web) can land after the mint event was painted
+      patchSocialLinks(el, e);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function renderHot(data, { force = false } = {}) {
+    const list = filterHot(pickHot(data));
+    if (!els.hotBody) return;
+
+    reconcileStreamList(els.hotBody, list, {
+      keyOf: (r) => String(r?.contract || "").toLowerCase(),
+      htmlOf: (r, i) => hotCardHtml(r, i),
+      sigOf: (r, i) => hotItemSig(r, i),
+      emptyHtml: `<div class="empty">${escapeHtml(t("hotEmpty"))}</div>`,
+      force,
+      patchEl: (el, r, i) => patchHotCard(el, r, i),
+      enterFromTop: false,
+    });
+  }
+
+  function renderFeed(data, { force = false } = {}) {
+    if (!els.feed) return;
+    let feed = Array.isArray(data?.feed) ? data.feed : [];
+    feed = feed.filter((e) => !isBlocked(e.contract) && !isNoiseNft(e));
 
     const nextKeys = new Set(feed.map((e) => e.key));
     lastFeedKeys = nextKeys;
 
-    els.feed.innerHTML = feed
-      .map((e) => {
-        const method = e.method
-          ? `<span class="pill mint">${escapeHtml(e.method)}</span>`
-          : "";
-        return `<article class="feed-item">
-          <div class="feed-top">
-            <div class="feed-title">
-              ${avatarHtml(e)}
-              <div class="name-row">
-                <a class="name" href="${e.explorerToken}" target="_blank" rel="noopener" title="${escapeHtml(e.name || "Unknown")}">${escapeHtml(ellipsize(e.name || "Unknown"))}</a>
-                ${riskBadgeHtml(e)}
-                ${starBtnHtml(e)}
-              </div>
-              ${socialsHtml(e)}
-            </div>
-            <span class="time">${relTime(e.timestamp)}</span>
-          </div>
-          <div class="feed-row">
-            <span>#${escapeHtml(String(e.tokenId ?? "?"))}</span>
-            <span>${escapeHtml(e.symbol || "")}</span>
-            ${method}
-            <span class="price-tag">${escapeHtml(
-              e.unitPriceEth == null
-                ? t("pricePending")
-                : e.unitPriceEth === "0"
-                  ? t("priceFree")
-                  : `${e.unitPriceEth} ETH`
-            )}</span>
-            <a href="${e.explorerMinter}" target="_blank" rel="noopener">${escapeHtml(t("minter"))} ${escapeHtml(e.minterShort || short(e.minter))}</a>
-            <a href="${e.explorerTx}" target="_blank" rel="noopener">tx ↗</a>
-          </div>
-        </article>`;
-      })
-      .join("");
+    reconcileStreamList(els.feed, feed, {
+      keyOf: (e) => String(e?.key || `${e?.contract}-${e?.tokenId}-${e?.timestamp}`),
+      htmlOf: (e) => feedCardHtml(e),
+      sigOf: (e) => feedItemSig(e),
+      emptyHtml: `<div class="empty">${escapeHtml(t("feedEmpty"))}</div>`,
+      force,
+      patchEl: (el, e) => patchFeedCard(el, e),
+      enterFromTop: true,
+    });
   }
 
   /**
@@ -2327,32 +2694,29 @@
       .map((r) => {
         const fullName = r.name || "Unknown";
         const priceText = formatPriceCell(r);
-        const minted = r.minted ?? r.totalSupply;
-        const max = r.maxSupply;
-        const supplyLabel =
-          max != null && minted != null
-            ? `${fmtNum(minted)} / ${fmtNum(max)}`
-            : fmtNum(minted);
-        return `<article class="feed-item is-out">
-          <div class="feed-top">
-            <div class="feed-title">
+        // lastMintAt ≈ mint-out completion moment (last mint before sold out)
+        const doneAt = r.lastMintAt || r.mintedOutAt || r.soldOutAt || "";
+        return `<article class="trench-item feed-item is-out">
+          <div class="trench-top feed-top">
+            <div class="trench-id feed-title">
               ${avatarHtml(r)}
-              <div class="name-row">
-                <a class="name" href="${r.explorerToken || "#"}" target="_blank" rel="noopener" title="${escapeHtml(fullName)}">${escapeHtml(ellipsize(fullName))}</a>
-                ${riskBadgeHtml(r)}
-                ${starBtnHtml(r)}
+              <div class="trench-name-block">
+                <div class="name-row">
+                  <a class="name" href="${r.explorerToken || "#"}" target="_blank" rel="noopener" title="${escapeHtml(fullName)}">${escapeHtml(ellipsize(fullName))}</a>
+                  ${riskBadgeHtml(r)}
+                  ${starBtnHtml(r)}
+                </div>
+                <div class="trench-sub trench-sub-spacer" aria-hidden="true">&nbsp;</div>
               </div>
-              ${socialsHtml(r)}
             </div>
-            <span class="time">${relTime(r.lastMintAt)}</span>
+            <div class="trench-links trench-links-end">${socialsHtml(r)}</div>
           </div>
-          <div class="out-meta">
+          <div class="trench-foot out-meta">
             <span class="pill-out">${escapeHtml(t("mintOut"))}</span>
-            <span class="price-tag">${escapeHtml(priceText)}</span>
-            <span>supply ${escapeHtml(String(supplyLabel))}</span>
-            <span>holders ${fmtNum(r.holders)}</span>
-            <span class="floor-price">${escapeHtml(formatFloorPriceCell(r))}</span>
-            <span class="trade-volume">${escapeHtml(formatTradeVolumeCell(r))}</span>
+            <span class="price-tag trench-meta-chip">${escapeHtml(priceText)}</span>
+            <span class="trench-meta-chip trench-mint-time" title="${escapeHtml(String(doneAt))}">${relTime(doneAt)}</span>
+            <span class="floor-price trench-meta-chip">${escapeHtml(formatFloorPriceCell(r))}</span>
+            <span class="trade-volume trench-meta-chip">${escapeHtml(formatTradeVolumeCell(r))}</span>
           </div>
         </article>`;
       })
@@ -2575,11 +2939,11 @@
     banner.hidden = false;
   }
 
-  function renderAll(data, { forceMintedOut = false } = {}) {
+  function renderAll(data, { forceMintedOut = false, forceLists = false } = {}) {
     // Hot first so pickHot can absorb any residual mint-outs into local archive
-    renderHot(data);
-    renderKingOfTheHill(data, { force: forceMintedOut });
-    renderFeed(data);
+    renderHot(data, { force: forceLists });
+    renderKingOfTheHill(data, { force: forceMintedOut || forceLists });
+    renderFeed(data, { force: forceLists });
     renderMintedOut(data, { force: forceMintedOut });
     renderStatus(data);
     updateBlockedUi();
@@ -2856,12 +3220,7 @@
     });
   }
   syncPriceFilterUi();
-  closePriceFilterMenu();
-  window.addEventListener("resize", positionPriceFilterMenu);
-  window.addEventListener("scroll", positionPriceFilterMenu, true);
-  document.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape" && isPriceFilterMenuOpen()) closePriceFilterMenu();
-  });
+  syncHotWindowUi();
 
   function rowFromContract(addr) {
     let row = { contract: addr };
@@ -2885,11 +3244,13 @@
     return row;
   }
 
-  // One-click favorite / block / price filter from hot list / live feed
+  // One-click favorite / block / hot filters from lists
   document.addEventListener("click", (ev) => {
-    const trigger = ev.target.closest("#btnPriceFilter");
-    if (trigger) {
-      togglePriceFilterMenu(ev);
+    const hotWin = ev.target.closest("[data-hot-window]");
+    if (hotWin) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      setHotWindow(hotWin.getAttribute("data-hot-window"));
       return;
     }
 
@@ -2899,19 +3260,6 @@
       ev.stopPropagation();
       setPriceFilter(priceOpt.getAttribute("data-price-filter"));
       return;
-    }
-
-    if (isPriceFilterMenuOpen()) {
-      if (Date.now() >= priceFilterIgnoreOutsideUntil) {
-        const t = ev.target;
-        if (
-          !t ||
-          typeof t.closest !== "function" ||
-          (!t.closest("#priceFilterMenu") && !t.closest("#btnPriceFilter"))
-        ) {
-          closePriceFilterMenu();
-        }
-      }
     }
 
     const favEl = ev.target.closest("[data-fav]");

@@ -113,8 +113,16 @@ const BLACKLIST = new Set(
   [
     "0x58daec3116aae6D93017bAAea7749052E8a04fA7", // Uniswap v4 Positions
     "0x73991a25C818Bf1f1128dEAaB1492D45638DE0D3", // Uniswap V3 Positions
+    "0x1e1577ba4dc74007ed6e8fb3d3ce2ce5477f531d", // Printr Dev Liquidity Position
   ].map((a) => a.toLowerCase())
 );
+
+/**
+ * Liquidity-position / AMM LP NFTs (not collectible mints).
+ * Avoid bare "Position NFT" — real collections use that (e.g. "up Position NFT").
+ */
+const LP_NFT_RE =
+  /liquidity[\s_-]*position|liquidityposition|concentrated[\s_-]*liquidity|uni[\s_-]?v[34]|uniswap|^\s*lp[\s_-]|[\s_-]lp[\s_-]?nft\b|\blp[\s_-]?position\b|positions?\s+manager/i;
 
 /** Name/symbol heuristics for junk airdrops */
 const JUNK_RE =
@@ -959,13 +967,27 @@ function isVeOrGovNft(token, method) {
   return false;
 }
 
-function isJunkToken(token, method) {
+function isLpPositionNft(token, tokenId) {
+  if (!token && tokenId == null) return false;
+  const name = String(token?.name || "");
+  const symbol = String(token?.symbol || "");
+  if (LP_NFT_RE.test(name) || LP_NFT_RE.test(symbol)) return true;
+  // Packed / huge token ids are common for position NFTs (not sequential #1..N drops)
+  const tid = String(
+    tokenId ?? token?.token_id ?? token?.tokenId ?? ""
+  ).replace(/^0x/i, "");
+  if (/^\d{24,}$/.test(tid)) return true;
+  return false;
+}
+
+function isJunkToken(token, method, tokenId) {
   if (!token) return true;
   const addr = String(token.address_hash || "").toLowerCase();
   if (BLACKLIST.has(addr)) return true;
   const name = token.name || "";
   const symbol = token.symbol || "";
   if (JUNK_RE.test(name) || JUNK_RE.test(symbol)) return true;
+  if (isLpPositionNft(token, tokenId)) return true;
   if (isVeOrGovNft(token, method)) return true;
   return false;
 }
@@ -974,7 +996,9 @@ function isMintItem(item) {
   if (!item || item.type !== "ERC-721") return false;
   const from = String(item.from?.hash || "").toLowerCase();
   if (from !== ZERO) return false;
-  if (isJunkToken(item.token, item.method)) return false;
+  // token_id lives on transfer total, not always on token object
+  const tokenId = item.total?.token_id ?? item.token_id ?? null;
+  if (isJunkToken(item.token, item.method, tokenId)) return false;
   return true;
 }
 
@@ -1550,15 +1574,38 @@ function parseOpenSeaCollectionHtml(html) {
     );
   if (og?.[1]) icon = resolveMediaUrl(og[1]);
 
+  // project / external website (skip social hosts — those belong on X/Discord)
+  let website = null;
+  const webJson =
+    html.match(/"projectUrl"\s*:\s*"(https?:\/\/[^"\\]+)"/i) ||
+    html.match(/"project_url"\s*:\s*"(https?:\/\/[^"\\]+)"/i) ||
+    html.match(/"externalUrl"\s*:\s*"(https?:\/\/[^"\\]+)"/i) ||
+    html.match(/"external_url"\s*:\s*"(https?:\/\/[^"\\]+)"/i);
+  if (webJson?.[1]) {
+    try {
+      const u = new URL(webJson[1].replace(/\\u002F/g, "/"));
+      const host = u.hostname.replace(/^www\./i, "").toLowerCase();
+      if (
+        host &&
+        !/(^|\.)(x|twitter|discord|t\.me|telegram|opensea)\./i.test(host) &&
+        !/^(x|twitter)\.com$/i.test(host)
+      ) {
+        website = u.toString();
+      }
+    } catch {
+      /* ignore bad url */
+    }
+  }
+
   const twitter = twitterUrl(twitterUser);
-  if (!slug && !twitter && !icon) return null;
+  if (!slug && !twitter && !icon && !website) return null;
   return {
     slug,
     twitter,
     icon,
     discord: null,
     telegram: null,
-    website: null,
+    website,
     description: null,
     opensea: slug
       ? `https://opensea.io/collection/${encodeURIComponent(slug)}`
@@ -1687,9 +1734,10 @@ async function fillTwitterFromHtml(contract, slugHint) {
     if (scraped.slug) meta.slug = scraped.slug;
     if (scraped.opensea) meta.opensea = scraped.opensea;
     if (scraped.icon && !meta.icon) meta.icon = scraped.icon;
+    if (scraped.website && !meta.website) meta.website = scraped.website;
     if (!meta.source) meta.source = "opensea";
     meta.updatedAt = Date.now();
-    if (meta.status !== "ok" && (meta.icon || meta.twitter)) {
+    if (meta.status !== "ok" && (meta.icon || meta.twitter || meta.website)) {
       meta.status = "ok";
     }
   } catch (e) {
@@ -3558,8 +3606,8 @@ export async function fetchWalletNfts(address, opts = {}) {
       const token = raw?.token || {};
       const contract = String(token.address_hash || "").toLowerCase();
       if (contract && BLACKLIST.has(contract)) continue;
-      if (isVeOrGovNft(token, null) || isJunkToken(token, null)) continue;
       const tokenId = String(raw?.id ?? raw?.token_id ?? "");
+      if (isVeOrGovNft(token, null) || isJunkToken(token, null, tokenId)) continue;
       const metaName = raw?.metadata?.name;
       const collection = String(token.name || token.symbol || "NFT").trim();
       const name =
